@@ -5,6 +5,16 @@ description = "Importador da demanda da Enel para o PMRD"
 requires-python = ">=3.12"
 dependencies = ["openpyxl", "keyring"]
 
+[project.scripts]
+pmrd-importar = "pmrd_importador.principal:main"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = [".", "tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["pmrd_importador"]
