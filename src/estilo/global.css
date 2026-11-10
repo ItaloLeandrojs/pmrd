@@ -72,6 +72,17 @@ button, input { font: inherit; color: inherit; }
 }
 .campo__caixa:focus-within { border-color: var(--acc); box-shadow: 0 0 0 3px var(--foco); }
 .campo__caixa input { flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; outline: 0; font-size: 15px; color: var(--ink); }
+/* Preenchimento automático do navegador: o Chrome pinta o fundo do campo por conta própria
+   e só a parte do texto mudava de cor dentro da moldura. Mantém a cor do tema. */
+.campo__caixa input:-webkit-autofill,
+.campo__caixa input:-webkit-autofill:hover,
+.campo__caixa input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--sf) inset;
+  -webkit-text-fill-color: var(--ink);
+  caret-color: var(--ink);
+  transition: background-color 600000s 0s;
+}
+.campo__caixa:has(input:autofill) { background: var(--sf); }
 .campo__olho { display: grid; place-items: center; width: 32px; height: 32px; margin-right: -8px; border: 0; border-radius: var(--raio-s); background: transparent; color: var(--mut); cursor: pointer; }
 .campo__olho:hover { color: var(--ink); }
 
