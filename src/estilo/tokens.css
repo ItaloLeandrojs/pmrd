@@ -1,0 +1,85 @@
+/* Tokens de cor, fonte e raio. Claro por padrão; escuro pelo Windows ou por data-tema="escuro". */
+:root {
+  --petroleo: #0b6e74;
+  --petroleo-escuro: #0c3b40;
+  --areia: #e3c77a;
+
+  --bg: #f1f5f5;
+  --sf: #ffffff;
+  --sf2: #f7fafa;
+  --ink: #0f2427;
+  --mut: #53676a;
+  --line: rgba(15, 36, 39, 0.11);
+  --line2: rgba(15, 36, 39, 0.22);
+  --acc: #0b6e74;
+  --acc-fg: #ffffff;
+  --ok: #17704a;
+  --bad: #ae2430;
+  --warn: #8a5a00;
+  --sel: rgba(11, 110, 116, 0.09);
+  --bad-bg: #f9e2e3;
+  --foco: rgba(11, 110, 116, 0.28);
+
+  --logo-pm: #0c3b40;
+  --logo-rd: #0b6e74;
+  --logo-selo-bg: #0c3b40;
+  --logo-selo-fg: #e3c77a;
+
+  --fonte-titulo: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', system-ui, sans-serif;
+  --fonte-texto: 'Hanken Grotesk Variable', 'Hanken Grotesk', system-ui, sans-serif;
+  --fonte-mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, monospace;
+
+  --raio-s: 8px;
+  --raio-m: 12px;
+  --raio-g: 16px;
+  --ease: cubic-bezier(0.23, 1, 0.32, 1);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-tema='claro']) {
+    --bg: #0a262a;
+    --sf: #0f3337;
+    --sf2: #0d2e32;
+    --ink: #e6f0ef;
+    --mut: #a3baba;
+    --line: rgba(230, 240, 239, 0.11);
+    --line2: rgba(230, 240, 239, 0.24);
+    --acc: #8fcfcb;
+    --acc-fg: #0c3b40;
+    --ok: #86dbad;
+    --bad: #f3949b;
+    --warn: #e3c77a;
+    --sel: rgba(143, 207, 203, 0.12);
+    --bad-bg: rgba(243, 148, 155, 0.14);
+    --foco: rgba(143, 207, 203, 0.3);
+    --logo-pm: #f1f5f5;
+    --logo-rd: #8fcfcb;
+    --logo-selo-bg: #e3c77a;
+    --logo-selo-fg: #0c3b40;
+    color-scheme: dark;
+  }
+}
+
+:root[data-tema='escuro'] {
+  --bg: #0a262a;
+  --sf: #0f3337;
+  --sf2: #0d2e32;
+  --ink: #e6f0ef;
+  --mut: #a3baba;
+  --line: rgba(230, 240, 239, 0.11);
+  --line2: rgba(230, 240, 239, 0.24);
+  --acc: #8fcfcb;
+  --acc-fg: #0c3b40;
+  --ok: #86dbad;
+  --bad: #f3949b;
+  --warn: #e3c77a;
+  --sel: rgba(143, 207, 203, 0.12);
+  --bad-bg: rgba(243, 148, 155, 0.14);
+  --foco: rgba(143, 207, 203, 0.3);
+  --logo-pm: #f1f5f5;
+  --logo-rd: #8fcfcb;
+  --logo-selo-bg: #e3c77a;
+  --logo-selo-fg: #0c3b40;
+  color-scheme: dark;
+}
