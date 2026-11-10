@@ -82,7 +82,7 @@ create table if not exists public.novidades (
   projeto        text not null,
   tipo           text not null check (tipo in ('novo', 'mudou', 'saiu', 'corrigido')),
   dados          jsonb not null,
-  assinatura     text not null,                      -- md5(tipo || projeto || dados::text)
+  assinatura     text not null,                      -- md5(tipo || projeto || fatos que pedem decisão)
   situacao       text not null default 'aberta'
                  check (situacao in ('aberta', 'aceita', 'recusada', 'substituida')),
   escolha        text,
@@ -150,9 +150,15 @@ grant all on sequence public.importacoes_id_seq, public.novidades_id_seq to serv
 --   saiu      projeto da Enel, não marcado como fora da demanda, fora das
 --             etapas finais, que não aparece na aba.
 --
--- Repetição: assinatura = md5(tipo || projeto || dados::text), com as listas
--- sempre na mesma ordem (a mesma foto dá a mesma assinatura). Já existe
--- aberta ou recusada com a mesma assinatura: não cria. Aberta do mesmo
+-- Repetição: a assinatura cobre só os fatos da demanda que pedem decisão,
+-- com as listas sempre na mesma ordem:
+--   novo      IDs ativos + prioridade do projeto (a menor dos ativos);
+--   mudou     IDs que entram + IDs que saem + prioridade nova;
+--   corrigido pares (id_gom, estado_enel);
+--   saiu      só tipo e projeto.
+-- assinatura = md5(tipo || projeto || esses fatos). dados guarda tudo.
+-- Já existe aberta com a mesma assinatura: só atualiza o dados dela (sem
+-- linha nova). Recusada com a mesma assinatura: não volta. Aberta do mesmo
 -- projeto e tipo com outra assinatura: vira substituida. No fim, toda aberta
 -- da regional cujo (projeto, tipo) não foi calculado nesta rodada também vira
 -- substituida (resolveu sozinha).
@@ -259,6 +265,14 @@ begin
     raise exception 'Defeito fechado sem ID no envio.';
   end if;
 
+  -- Um item vazio (null) em presentes faria todo projeto fora da lista
+  -- escapar do "saiu" em silêncio.
+  if exists (select 1 from jsonb_array_elements(p_envio -> 'presentes') x
+              where jsonb_typeof(x.value) <> 'string'
+                 or btrim(x.value #>> '{}') = '') then
+    raise exception 'Projeto vazio ou fora do formato na lista de presentes.';
+  end if;
+
   -- Presentes: a lista da aba mais os ativos (por garantia).
   select coalesce(array_agg(distinct t.x), '{}') into v_presentes
     from (
@@ -303,13 +317,20 @@ begin
       select 1 as ordem, en.projeto, 'novo'::text as tipo,
              en.projeto_json || jsonb_build_object('defeitos', (
                select coalesce(jsonb_agg(d.value order by d.value ->> 'id_gom' collate "C"), '[]'::jsonb)
-                 from jsonb_array_elements(en.defeitos) d)) as dados
+                 from jsonb_array_elements(en.defeitos) d)) as dados,
+             jsonb_build_object(
+               'ids', (select coalesce(jsonb_agg(d.value ->> 'id_gom' order by d.value ->> 'id_gom' collate "C"),
+                                       '[]'::jsonb)
+                         from jsonb_array_elements(en.defeitos) d),
+               'prioridade', (select min((d.value ->> 'prioridade')::int)
+                                from jsonb_array_elements(en.defeitos) d
+                               where jsonb_typeof(d.value -> 'prioridade') = 'number')) as chave
         from envio en
        where not exists (select 1 from public.projetos p where p.projeto = en.projeto)
     ),
     mudancas as (
       select en.projeto, p.prioridade as prioridade_antes,
-             ent.lista as entram, ent.n as n_entram,
+             ent.lista as entram, ent.ids as ids_entram, ent.n as n_entram,
              sa.lista as saem, sa.n as n_saem,
              case when pr.menor is not null and pr.menor is distinct from p.prioridade
                   then pr.menor end as prioridade_nova,
@@ -318,6 +339,8 @@ begin
         join public.projetos p on p.projeto = en.projeto and p.regional = p_regional
         cross join lateral (
           select coalesce(jsonb_agg(d.value order by d.value ->> 'id_gom' collate "C"), '[]'::jsonb) as lista,
+                 coalesce(jsonb_agg(d.value ->> 'id_gom' order by d.value ->> 'id_gom' collate "C"),
+                          '[]'::jsonb) as ids,
                  count(*) as n
             from jsonb_array_elements(en.defeitos) d
            where not exists (
@@ -349,7 +372,11 @@ begin
                'saem', m.saem,
                'prioridade_antes', m.prioridade_antes,
                'prioridade_nova', m.prioridade_nova,
-               'alimentadores', m.alimentadores) as dados
+               'alimentadores', m.alimentadores) as dados,
+             jsonb_build_object(
+               'entram', m.ids_entram,
+               'saem', m.saem,
+               'prioridade_nova', m.prioridade_nova) as chave
         from mudancas m
        where m.n_entram > 0 or m.n_saem > 0 or m.prioridade_nova is not null
     ),
@@ -363,14 +390,16 @@ begin
       select 3 as ordem, x.projeto, 'corrigido'::text as tipo,
              jsonb_build_object('defeitos', jsonb_agg(
                jsonb_build_object('id_gom', x.id_gom, 'estado_enel', f.estado_enel)
-               order by x.id_gom collate "C")) as dados
+               order by x.id_gom collate "C")) as dados,
+             jsonb_agg(jsonb_build_array(x.id_gom, f.estado_enel) order by x.id_gom collate "C") as chave
         from fechados f
         join public.defeitos x on x.id_gom = f.id_gom and x.situacao in ('pendente', 'programado')
         join public.projetos p on p.projeto = x.projeto and p.regional = p_regional
        group by x.projeto
     ),
     sairam as (
-      select 4 as ordem, p.projeto, 'saiu'::text as tipo, jsonb_build_object('etapa', p.etapa) as dados
+      select 4 as ordem, p.projeto, 'saiu'::text as tipo, jsonb_build_object('etapa', p.etapa) as dados,
+             null::jsonb as chave
         from public.projetos p
        where p.origem = 'enel'
          and p.regional = p_regional
@@ -378,7 +407,7 @@ begin
          and p.etapa not in ('EXECUTADA', 'TRANSFERIDA', 'NÃO EXECUTÁVEL')
          and not (p.projeto = any (v_presentes))
     )
-    select c.projeto, c.tipo, c.dados
+    select c.projeto, c.tipo, c.dados, c.chave
       from (select * from novos
             union all select * from mudou
             union all select * from corrigidos
@@ -386,9 +415,9 @@ begin
      order by c.ordem, c.projeto collate "C"
   loop
     v_calculadas := v_calculadas || (v_item.tipo || '|' || v_item.projeto);
-    v_assinatura := md5(v_item.tipo || v_item.projeto || v_item.dados::text);
+    v_assinatura := md5(v_item.tipo || v_item.projeto || coalesce(v_item.chave::text, ''));
 
-    -- A aberta que descreve outra foto ficou velha.
+    -- A aberta que pede outra decisão ficou velha.
     update public.novidades n
        set situacao = 'substituida', decidida_em = now()
      where n.regional = p_regional
@@ -397,14 +426,24 @@ begin
        and n.situacao = 'aberta'
        and n.assinatura <> v_assinatura;
 
-    -- A mesma foto já está na fila ou já foi recusada: não repete.
+    -- A mesma decisão já está na fila: só atualiza o dados, sem linha nova.
+    update public.novidades n
+       set dados = v_item.dados
+     where n.regional = p_regional
+       and n.projeto = v_item.projeto
+       and n.tipo = v_item.tipo
+       and n.situacao = 'aberta'
+       and n.assinatura = v_assinatura;
+    continue when found;
+
+    -- A mesma decisão já foi recusada: não volta.
     continue when exists (
       select 1 from public.novidades n
        where n.regional = p_regional
          and n.projeto = v_item.projeto
          and n.tipo = v_item.tipo
          and n.assinatura = v_assinatura
-         and n.situacao in ('aberta', 'recusada'));
+         and n.situacao = 'recusada');
 
     insert into public.novidades (importacao_id, regional, projeto, tipo, dados, assinatura)
     values (v_importacao, p_regional, v_item.projeto, v_item.tipo, v_item.dados, v_assinatura);

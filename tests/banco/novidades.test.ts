@@ -511,6 +511,86 @@ describe('002_novidades: enviar_demanda', () => {
     ).rejects.toThrow('Só o importador envia a demanda.')
   })
 
+  // ---- Correção rodada 1 ----
+  it('presentes com item vazio ou fora do formato é recusado', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [])
+    for (const presentes of [['EXEMPLO-0006', null], ['EXEMPLO-0006', ''], ['EXEMPLO-0006', 7]]) {
+      await expect(
+        como(db, { id: robo }, 'select public.enviar_demanda($1, $2, $3::jsonb)', [
+          'SUL',
+          'x.xlsx',
+          JSON.stringify({ projetos: [], presentes }),
+        ]),
+      ).rejects.toThrow('Projeto vazio ou fora do formato na lista de presentes.')
+    }
+    const { rows } = await db.query<{ n: number }>('select count(*)::int as n from public.importacoes')
+    expect(rows[0].n).toBe(0)
+  })
+
+  it('com presentes válido o saiu continua saindo', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [])
+    await projetoNaCarteira('EXEMPLO-0006', [])
+    const resumo = await enviar({ projetos: [], presentes: ['EXEMPLO-0006'] })
+    expect(resumo).toMatchObject({ saiu: 1 })
+    expect((await novidades()).map((n) => [n.projeto, n.tipo, n.situacao])).toEqual([
+      ['EXEMPLO-0001', 'saiu', 'aberta'],
+    ])
+  })
+
+  it('mudou recusado não volta quando um defeito de entram passa de PENDENTE para EXECUÇÃO', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }])
+    const envio: Envio = {
+      projetos: [projetoEnvio('EXEMPLO-0001', ['-9000001', '-9000003'])],
+      presentes: ['EXEMPLO-0001'],
+    }
+    await enviar(envio)
+    await db.query(`update public.novidades set situacao = 'recusada'`)
+    envio.projetos[0].defeitos[1].estado_enel = 'EXECUÇÃO'
+    expect(await enviar(envio)).toMatchObject({ mudou: 0 })
+    expect((await novidades()).map((n) => n.situacao)).toEqual(['recusada'])
+  })
+
+  it('mudou recusado não volta quando a prioridade da carteira é editada à mão', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }], { prioridade: 7 })
+    const p = projetoEnvio('EXEMPLO-0001', [])
+    p.defeitos = [defeito('-9000001', 5), defeito('-9000003', 9)]
+    const envio: Envio = { projetos: [p], presentes: ['EXEMPLO-0001'] }
+    await enviar(envio)
+    await db.query(`update public.novidades set situacao = 'recusada'`)
+    await db.query(`update public.projetos set prioridade = 6 where projeto = 'EXEMPLO-0001'`)
+    expect(await enviar(envio)).toMatchObject({ mudou: 0 })
+    expect((await novidades()).map((n) => n.situacao)).toEqual(['recusada'])
+  })
+
+  it('novo aberto tem os dados atualizados no lugar, sem linha nova', async () => {
+    const envio: Envio = { projetos: [projetoEnvio('EXEMPLO-0001', ['-9000001'])], presentes: ['EXEMPLO-0001'] }
+    await enviar(envio)
+    const [antes] = await novidades()
+    envio.projetos[0].municipio = 'Nova Exemplópolis'
+    expect(await enviar(envio)).toMatchObject({ novo: 0 })
+    const lista = await novidades()
+    expect(lista).toHaveLength(1)
+    expect(lista[0]).toMatchObject({ id: antes.id, situacao: 'aberta', assinatura: antes.assinatura })
+    expect(lista[0].dados).toMatchObject({ municipio: 'Nova Exemplópolis' })
+  })
+
+  it('novo com outra prioridade ou outros IDs vira outra novidade', async () => {
+    const envio: Envio = { projetos: [projetoEnvio('EXEMPLO-0001', ['-9000001'])], presentes: ['EXEMPLO-0001'] }
+    await enviar(envio)
+    envio.projetos[0].defeitos[0].prioridade = 3
+    expect(await enviar(envio)).toMatchObject({ novo: 1 })
+    expect((await novidades()).map((n) => n.situacao)).toEqual(['substituida', 'aberta'])
+  })
+
+  it('saiu recusado não volta quando a etapa do projeto muda', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [])
+    await enviar({ projetos: [], presentes: [] })
+    await db.query(`update public.novidades set situacao = 'recusada'`)
+    await db.query(`update public.projetos set etapa = 'SOLICITAR VISTORIA' where projeto = 'EXEMPLO-0001'`)
+    expect(await enviar({ projetos: [], presentes: [] })).toMatchObject({ saiu: 0 })
+    expect((await novidades()).map((n) => [n.tipo, n.situacao])).toEqual([['saiu', 'recusada']])
+  })
+
   it('rodar as migrações de novo continua sem erro', async () => {
     await aplicarMigracoes(db)
   })
