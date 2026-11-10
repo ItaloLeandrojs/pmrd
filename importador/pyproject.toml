@@ -1,0 +1,10 @@
+[project]
+name = "pmrd-importador"
+version = "0.1.0"
+description = "Importador da demanda da Enel para o PMRD"
+requires-python = ">=3.12"
+dependencies = ["openpyxl", "keyring"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = [".", "tests"]

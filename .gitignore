@@ -15,3 +15,7 @@ dados/
 dist-previa
 e2e/prints
 node_modules/.astro-previa
+
+.venv/
+__pycache__/
+.pytest_cache/
