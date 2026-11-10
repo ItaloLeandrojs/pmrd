@@ -56,7 +56,7 @@ let contador = 0
 /** Cria uma conta fictícia (o gatilho cria o perfil) e ajusta papel e ativo. Devolve o id. */
 export async function criarPessoa(
   db: PGlite,
-  { papel, ativo = true }: { papel: 'admin' | 'equipe'; ativo?: boolean },
+  { papel, ativo = true }: { papel: 'admin' | 'equipe' | 'importador'; ativo?: boolean },
 ): Promise<string> {
   contador += 1
   const email = `exemplo-${contador}@exemplo.test`

@@ -1,6 +1,6 @@
 export type Regional = 'CS' | 'SUL' | 'LESTE'
 export type FiltroRegional = Regional | 'TODAS'
 export type TipoEquipe = 'ML' | 'LVR' | 'MP' | 'LV'
-export type Papel = 'admin' | 'equipe'
+export type Papel = 'admin' | 'equipe' | 'importador'
 export type Tema = 'sistema' | 'claro' | 'escuro'
 export type DataISO = string // 'AAAA-MM-DD'

@@ -109,4 +109,17 @@ describe('Usuarios', () => {
     // O e-mail ocupa o lugar do nome (não só a linha de baixo, que deixaria o nome em branco).
     expect(achados[0].className).toContain('cfg__item-nome')
   })
+
+  it('conta do robô mostra Importador (robô) e não tem ações', async () => {
+    vi.mocked(listarUsuarios).mockResolvedValue([
+      lista[0],
+      { id: OUTRA, email: 'robo@exemplo.test', nome: 'Robô Exemplo', papel: 'importador', ativo: true, senha_provisoria: false },
+    ])
+    render(<Usuarios c={c} meuId={EU} />)
+    const l = await linha('Robô Exemplo')
+    expect(l.getByText(/Importador \(robô\)/)).toBeTruthy()
+    expect(l.queryByRole('button', { name: 'Redefinir senha' })).toBeNull()
+    expect(l.queryByRole('button', { name: 'Desativar' })).toBeNull()
+    expect(l.queryByRole('button', { name: /Tornar/ })).toBeNull()
+  })
 })

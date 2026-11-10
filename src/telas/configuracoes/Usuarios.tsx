@@ -7,6 +7,12 @@ import { listarUsuarios, type Usuario } from '../../nuvem/configuracoes'
 import { mensagemDeErro } from '../../nuvem/erros'
 import { chamarUsuarios, type PedidoUsuarios } from '../../nuvem/usuarios'
 
+const ROTULO_PAPEL: Record<Papel, string> = {
+  admin: 'Administrador',
+  equipe: 'Equipe',
+  importador: 'Importador (robô)',
+}
+
 export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
   const [lista, setLista] = useState<Usuario[] | null>(null)
   const [erro, setErro] = useState<string | null>(null)
@@ -15,7 +21,7 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
   const [senhaNova, setSenhaNova] = useState('')
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
-  const [papel, setPapel] = useState<Papel>('equipe')
+  const [papel, setPapel] = useState<'admin' | 'equipe'>('equipe')
   const [senha, setSenha] = useState('')
 
   const carregar = useCallback(async () => {
@@ -64,7 +70,7 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
         <label className="cfg__rotulo" htmlFor="us-email">E-mail</label>
         <input id="us-email" type="email" className="cfg__entrada" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
         <label className="cfg__rotulo" htmlFor="us-papel">Papel</label>
-        <select id="us-papel" className="cfg__entrada" value={papel} onChange={(e) => setPapel(e.target.value as Papel)}>
+        <select id="us-papel" className="cfg__entrada" value={papel} onChange={(e) => setPapel(e.target.value as 'admin' | 'equipe')}>
           <option value="equipe">Equipe</option>
           <option value="admin">Administrador</option>
         </select>
@@ -103,11 +109,12 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
                         {u.nome.trim() !== '' && <span className="cfg__item-sub">{u.email}</span>}
                       </span>
                       <span className="cfg__item-sit">
-                        {u.papel === 'admin' ? 'Administrador' : 'Equipe'}
+                        {ROTULO_PAPEL[u.papel]}
                         {!u.ativo && ', desativado'}
                         {u.senha_provisoria && ', senha provisória'}
                       </span>
                     </div>
+                    {u.papel !== 'importador' && (
                     <div className="cfg__acoes">
                       <button type="button" className="cfg__botao cfg__botao--p"
                         aria-expanded={redefinindo === u.id} aria-controls={`us-redefinir-${u.id}`}
@@ -128,6 +135,7 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
                         ? <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void pedir({ acao: 'desativar', id: u.id }, 'Conta desativada.')}>Desativar</button>
                         : <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void pedir({ acao: 'reativar', id: u.id }, 'Conta reativada.')}>Reativar</button>)}
                     </div>
+                    )}
                     {redefinindo === u.id && (
                       <form id={`us-redefinir-${u.id}`} className="cfg__redefinir" onSubmit={(e) => void redefinir(e, u.id)} noValidate>
                         <label className="cfg__rotulo" htmlFor={`us-nova-${u.id}`}>Senha provisória</label>
