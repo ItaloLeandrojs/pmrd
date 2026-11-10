@@ -500,3 +500,277 @@ revoke all on function public.enviar_demanda(text, text, jsonb) from public, ano
 revoke all on function public.registrar_erro_importacao(text, text, text) from public, anon;
 grant execute on function public.enviar_demanda(text, text, jsonb) to authenticated;
 grant execute on function public.registrar_erro_importacao(text, text, text) to authenticated;
+
+-- ---------------------------------------------------------------
+-- 7. criar_projeto_da_demanda: projeto novo da Enel (interna)
+-- ---------------------------------------------------------------
+-- Recebe o projeto como o enviar_demanda guarda no dados do "novo":
+--   {projeto, municipio, alimentadores, defeitos [{id_gom, prioridade,
+--    estrutura, alimentador, estado_enel, lat, lng}]}.
+-- Cria o projeto (origem enel, EM ANÁLISE, prioridade = a menor dos
+-- defeitos, lat/lng = média dos defeitos com coordenada) e os defeitos
+-- pendentes. Usada pelo aceitar_novidade e pela carga inicial; não tem
+-- grant para authenticated (quem chama confere quem pode).
+create or replace function public.criar_projeto_da_demanda(p_regional text, p_dados jsonb)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_projeto  text := btrim(p_dados ->> 'projeto');
+  v_defeitos jsonb := coalesce(p_dados -> 'defeitos', '[]'::jsonb);
+  v_id       text;
+  v_outro    text;
+begin
+  if coalesce(v_projeto, '') = '' or jsonb_typeof(v_defeitos) <> 'array' then
+    raise exception 'Projeto sem nome ou sem lista de defeitos.';
+  end if;
+
+  if exists (select 1 from public.projetos where projeto = v_projeto) then
+    raise exception 'Este projeto já está na carteira. Recuse esta novidade: a próxima importação mostra o que mudou.';
+  end if;
+
+  select d.value ->> 'id_gom', x.projeto into v_id, v_outro
+    from jsonb_array_elements(v_defeitos) d
+    join public.defeitos x on x.id_gom = d.value ->> 'id_gom'
+   order by d.value ->> 'id_gom' collate "C"
+   limit 1;
+  if found then
+    raise exception 'O defeito % já está no projeto %.', v_id, v_outro;
+  end if;
+
+  insert into public.projetos (projeto, regional, origem, etapa, municipio, alimentadores, prioridade, lat, lng)
+  select v_projeto, p_regional, 'enel', 'EM ANÁLISE',
+         nullif(btrim(p_dados ->> 'municipio'), ''),
+         array(select jsonb_array_elements_text(coalesce(p_dados -> 'alimentadores', '[]'::jsonb))),
+         (select min((d.value ->> 'prioridade')::int)
+            from jsonb_array_elements(v_defeitos) d
+           where jsonb_typeof(d.value -> 'prioridade') = 'number'),
+         c.lat, c.lng
+    from (select avg((d.value ->> 'lat')::double precision) as lat,
+                 avg((d.value ->> 'lng')::double precision) as lng
+            from jsonb_array_elements(v_defeitos) d
+           where jsonb_typeof(d.value -> 'lat') = 'number'
+             and jsonb_typeof(d.value -> 'lng') = 'number') c;
+
+  insert into public.defeitos (id_gom, projeto, prioridade, estrutura, alimentador, estado_enel, situacao, lat, lng)
+  select d.value ->> 'id_gom', v_projeto,
+         case when jsonb_typeof(d.value -> 'prioridade') = 'number' then (d.value ->> 'prioridade')::int end,
+         d.value ->> 'estrutura', d.value ->> 'alimentador', d.value ->> 'estado_enel', 'pendente',
+         case when jsonb_typeof(d.value -> 'lat') = 'number' then (d.value ->> 'lat')::double precision end,
+         case when jsonb_typeof(d.value -> 'lng') = 'number' then (d.value ->> 'lng')::double precision end
+    from jsonb_array_elements(v_defeitos) d
+   order by d.value ->> 'id_gom' collate "C";
+end;
+$$;
+
+-- ---------------------------------------------------------------
+-- 8. aceitar_novidade, aceitar_novidades e recusar_novidade
+-- ---------------------------------------------------------------
+-- Só administrador ativo (eh_admin). Tudo numa transação: um erro desfaz o
+-- que já tinha sido gravado. O histórico do plano 1 registra o admin como
+-- quem, porque o gatilho lê o auth.uid() de quem chamou.
+--   novo      cria o projeto (criar_projeto_da_demanda).
+--   mudou     entram viram pendente (um removido do mesmo projeto volta com
+--             os campos novos); saem pendente ou programado viram removido;
+--             prioridade_nova (se não for nula) e alimentadores vão para o
+--             projeto. Etapa, próxima ação, responsável e município ficam.
+--   saiu      p_escolha MANTER, TRANSFERIDA ou NÃO EXECUTÁVEL; sempre marca
+--             saiu_da_demanda; nas duas últimas a etapa vira a escolha.
+--   corrigido p_escolha EXECUTADO (viram executado) ou TIRAR (viram removido),
+--             com o estado_enel novo.
+-- mudou, saiu e corrigido de um projeto que não está mais na carteira da
+-- regional: erro, para o admin recusar.
+create or replace function public.aceitar_novidade(p_id bigint, p_escolha text default null)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_nov      public.novidades%rowtype;
+  v_regional text;
+  v_d        jsonb;
+  v_id       text;
+  v_atual    record;
+  v_saem     text[];
+  v_escolha  text;
+begin
+  if not public.eh_admin() then
+    raise exception 'Só administrador decide as novidades.';
+  end if;
+
+  select * into v_nov from public.novidades where id = p_id for update;
+  if not found then
+    raise exception 'Novidade não encontrada.';
+  end if;
+  if v_nov.situacao <> 'aberta' then
+    raise exception 'Esta novidade já foi decidida.';
+  end if;
+
+  if v_nov.tipo = 'novo' then
+    perform public.criar_projeto_da_demanda(v_nov.regional, v_nov.dados);
+  else
+    select regional into v_regional from public.projetos where projeto = v_nov.projeto for update;
+    if not found or v_regional <> v_nov.regional then
+      raise exception 'O projeto % não está mais na carteira. Recuse esta novidade.', v_nov.projeto;
+    end if;
+  end if;
+
+  if v_nov.tipo = 'mudou' then
+    for v_d in select e.value from jsonb_array_elements(coalesce(v_nov.dados -> 'entram', '[]'::jsonb)) e
+                order by e.value ->> 'id_gom' collate "C"
+    loop
+      v_id := v_d ->> 'id_gom';
+      select projeto, situacao into v_atual from public.defeitos where id_gom = v_id for update;
+      if not found then
+        insert into public.defeitos (id_gom, projeto, prioridade, estrutura, alimentador, estado_enel, situacao, lat, lng)
+        values (v_id, v_nov.projeto,
+                case when jsonb_typeof(v_d -> 'prioridade') = 'number' then (v_d ->> 'prioridade')::int end,
+                v_d ->> 'estrutura', v_d ->> 'alimentador', v_d ->> 'estado_enel', 'pendente',
+                case when jsonb_typeof(v_d -> 'lat') = 'number' then (v_d ->> 'lat')::double precision end,
+                case when jsonb_typeof(v_d -> 'lng') = 'number' then (v_d ->> 'lng')::double precision end);
+      elsif v_atual.projeto <> v_nov.projeto then
+        raise exception 'O defeito % já está no projeto %.', v_id, v_atual.projeto;
+      elsif v_atual.situacao = 'removido' then
+        -- Reaberto: volta com o que a Enel mostra agora.
+        update public.defeitos
+           set situacao    = 'pendente',
+               prioridade  = case when jsonb_typeof(v_d -> 'prioridade') = 'number'
+                                  then (v_d ->> 'prioridade')::int end,
+               estrutura   = v_d ->> 'estrutura',
+               alimentador = v_d ->> 'alimentador',
+               estado_enel = v_d ->> 'estado_enel',
+               lat = case when jsonb_typeof(v_d -> 'lat') = 'number' then (v_d ->> 'lat')::double precision end,
+               lng = case when jsonb_typeof(v_d -> 'lng') = 'number' then (v_d ->> 'lng')::double precision end
+         where id_gom = v_id;
+      end if;
+      -- Já está no projeto e não foi removido (alguém pôs à mão depois da
+      -- foto): fica como está.
+    end loop;
+
+    select coalesce(array_agg(s), '{}') into v_saem
+      from jsonb_array_elements_text(coalesce(v_nov.dados -> 'saem', '[]'::jsonb)) s;
+    update public.defeitos
+       set situacao = 'removido'
+     where projeto = v_nov.projeto
+       and id_gom = any (v_saem)
+       and situacao in ('pendente', 'programado');
+
+    -- prioridade_nova nula: a prioridade não mudou.
+    update public.projetos
+       set prioridade = case when jsonb_typeof(v_nov.dados -> 'prioridade_nova') = 'number'
+                             then (v_nov.dados ->> 'prioridade_nova')::int
+                             else prioridade end,
+           alimentadores = case when jsonb_typeof(v_nov.dados -> 'alimentadores') = 'array'
+                                then array(select jsonb_array_elements_text(v_nov.dados -> 'alimentadores'))
+                                else alimentadores end
+     where projeto = v_nov.projeto;
+
+  elsif v_nov.tipo = 'saiu' then
+    if p_escolha is null or p_escolha not in ('MANTER', 'TRANSFERIDA', 'NÃO EXECUTÁVEL') then
+      raise exception 'Escolha o que fazer com este projeto.';
+    end if;
+    v_escolha := p_escolha;
+    update public.projetos
+       set saiu_da_demanda = true,
+           etapa = case when p_escolha = 'MANTER' then etapa else p_escolha end
+     where projeto = v_nov.projeto;
+
+  elsif v_nov.tipo = 'corrigido' then
+    if p_escolha is null or p_escolha not in ('EXECUTADO', 'TIRAR') then
+      raise exception 'Escolha o que fazer com este projeto.';
+    end if;
+    v_escolha := p_escolha;
+    update public.defeitos x
+       set situacao    = case when p_escolha = 'EXECUTADO' then 'executado' else 'removido' end,
+           estado_enel = coalesce(c.value ->> 'estado_enel', x.estado_enel)
+      from jsonb_array_elements(coalesce(v_nov.dados -> 'defeitos', '[]'::jsonb)) c
+     where x.id_gom = c.value ->> 'id_gom'
+       and x.projeto = v_nov.projeto
+       and x.situacao in ('pendente', 'programado');
+  end if;
+
+  update public.novidades
+     set situacao     = 'aceita',
+         escolha      = v_escolha,
+         decidida_em  = now(),
+         decidida_por = (select auth.uid())
+   where id = p_id;
+end;
+$$;
+
+-- Em lote só novo e mudou (não pedem escolha). Tudo ou nada: o primeiro
+-- erro desfaz o lote inteiro e a mensagem dele sobe. Devolve quantas.
+create or replace function public.aceitar_novidades(p_ids bigint[])
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_id bigint;
+  v_n  int := 0;
+begin
+  if not public.eh_admin() then
+    raise exception 'Só administrador decide as novidades.';
+  end if;
+
+  if exists (select 1 from public.novidades
+              where id = any (coalesce(p_ids, '{}'))
+                and tipo not in ('novo', 'mudou')) then
+    raise exception 'Em lote, só projetos novos e mudanças. Decida os outros um a um.';
+  end if;
+
+  -- Na ordem pedida, sem repetir.
+  for v_id in
+    select u.id from unnest(coalesce(p_ids, '{}')) with ordinality as u (id, ordem)
+     group by u.id
+     order by min(u.ordem)
+  loop
+    perform public.aceitar_novidade(v_id, null);
+    v_n := v_n + 1;
+  end loop;
+  return v_n;
+end;
+$$;
+
+create or replace function public.recusar_novidade(p_id bigint)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_situacao text;
+begin
+  if not public.eh_admin() then
+    raise exception 'Só administrador decide as novidades.';
+  end if;
+
+  select situacao into v_situacao from public.novidades where id = p_id for update;
+  if not found then
+    raise exception 'Novidade não encontrada.';
+  end if;
+  if v_situacao <> 'aberta' then
+    raise exception 'Esta novidade já foi decidida.';
+  end if;
+
+  update public.novidades
+     set situacao     = 'recusada',
+         decidida_em  = now(),
+         decidida_por = (select auth.uid())
+   where id = p_id;
+end;
+$$;
+
+-- A checagem de quem chama fica dentro das funções (eh_admin).
+-- criar_projeto_da_demanda é interna: ninguém do site chama direto.
+revoke all on function public.criar_projeto_da_demanda(text, jsonb) from public, anon, authenticated;
+revoke all on function public.aceitar_novidade(bigint, text) from public, anon;
+revoke all on function public.aceitar_novidades(bigint[]) from public, anon;
+revoke all on function public.recusar_novidade(bigint) from public, anon;
+grant execute on function public.aceitar_novidade(bigint, text) to authenticated;
+grant execute on function public.aceitar_novidades(bigint[]) to authenticated;
+grant execute on function public.recusar_novidade(bigint) to authenticated;
