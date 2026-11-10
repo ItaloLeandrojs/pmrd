@@ -1,7 +1,7 @@
 // Estado da sessão: carregando, fora ou dentro (com perfil ativo).
 import { useCallback, useEffect, useState } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { mensagemDeErro } from './erros'
+import { CONTA_DESATIVADA, mensagemDeErro } from './erros'
 import { carregarPerfil, type Perfil } from './perfil'
 
 export type EstadoSessao = 'carregando' | 'fora' | 'dentro'
@@ -18,7 +18,7 @@ export function useSessao(c: SupabaseClient | null) {
         await cli.auth.signOut()
         setPerfil(null)
         setEstado('fora')
-        return 'Esta conta está desativada. Fale com o administrador.'
+        return CONTA_DESATIVADA
       }
       setPerfil(p)
       setEstado('dentro')

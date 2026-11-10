@@ -212,6 +212,25 @@ function motivoDosDefeitos(e: unknown): string {
   return mensagemDeErro(e)
 }
 
+const MSG_SEM_SABER =
+  'A conexão caiu e não dá para saber se o projeto entrou. Feche, atualize a carteira e procure por ele antes de tentar de novo.'
+
+/** true/false se o banco respondeu; null se nem a conferência chegou. */
+async function projetoExiste(c: SupabaseClient, projeto: string): Promise<boolean | null> {
+  try {
+    const { data, error } = await c
+      .from('projetos')
+      .select('projeto')
+      .eq('projeto', projeto)
+      .abortSignal(AbortSignal.timeout(LIMITE_MS))
+      .maybeSingle()
+    if (error) return null
+    return data !== null
+  } catch {
+    return null
+  }
+}
+
 /**
  * Cria o projeto à mão e depois os defeitos pendentes (dois pedidos; o banco não tem função para os dois juntos).
  * Se os defeitos falharem, o projeto já entrou: o resultado diz isso (projetoCriado) e o porquê.
@@ -241,8 +260,12 @@ export async function criarProjetoManual(c: SupabaseClient, n: NovoProjeto): Pro
     if (error) throw error
   } catch (e) {
     if (codigoDoErro(e) === '23505') return { ok: false, erro: MSG_PROJETO_REPETIDO }
-    if (ehErroDeRede(e)) return { ok: false, erro: 'Não salvou: sem conexão. Confira a internet ou a VPN.' }
-    return { ok: false, erro: `Não salvou: ${mensagemDeErro(e)}` }
+    if (!ehErroDeRede(e)) return { ok: false, erro: `Não salvou: ${mensagemDeErro(e)}` }
+    // Tempo limite ou queda: o banco pode ter gravado mesmo sem a resposta chegar. Confere antes de dizer.
+    const existe = await projetoExiste(c, projeto)
+    if (existe === false) return { ok: false, erro: 'Não salvou: sem conexão. Confira a internet ou a VPN.' }
+    if (existe === null) return { ok: false, erro: MSG_SEM_SABER }
+    // Gravou: segue para os defeitos como se a resposta tivesse chegado.
   }
 
   if (ids.length === 0) return { ok: true }

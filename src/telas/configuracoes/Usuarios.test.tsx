@@ -45,6 +45,18 @@ describe('Usuarios', () => {
     expect(chamarUsuarios).toHaveBeenCalledWith(c, { acao: 'redefinir', id: OUTRA, senha: 'provisoria123' })
   })
 
+  it('Redefinir senha fica marcado (aria-expanded) com o campo aberto, e o cursor vai para a senha', async () => {
+    render(<Usuarios c={c} meuId={EU} />)
+    const l = await linha('Pessoa Exemplo')
+    const botao = l.getByRole('button', { name: 'Redefinir senha' })
+    expect(botao.getAttribute('aria-expanded')).toBe('false')
+    await userEvent.click(botao)
+    expect(botao.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(l.getByLabelText('Senha provisória'))
+    await userEvent.click(botao)
+    expect(botao.getAttribute('aria-expanded')).toBe('false')
+  })
+
   it('mostra o erro devolvido em role="alert"', async () => {
     vi.mocked(chamarUsuarios).mockResolvedValue({ ok: false, erro: 'A senha provisória precisa de pelo menos 8 caracteres.' })
     render(<Usuarios c={c} meuId={EU} />)

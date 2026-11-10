@@ -9,6 +9,8 @@ export function Motivos({ c }: { c: SupabaseClient }) {
   const [lista, setLista] = useState<Motivo[] | null>(null)
   const [nome, setNome] = useState('')
   const [erro, setErro] = useState<string | null>(null)
+  // Uma gravação por vez: o duplo clique não pode criar dois iguais.
+  const [salvando, setSalvando] = useState(false)
 
   const carregar = useCallback(async () => {
     try {
@@ -23,26 +25,34 @@ export function Motivos({ c }: { c: SupabaseClient }) {
 
   async function acrescentar(e: FormEvent) {
     e.preventDefault()
+    if (salvando) return
     const n = nome.trim().toUpperCase()
     if (!n) return setErro('Escreva o nome do motivo.')
     if (lista?.some((m) => m.nome.toUpperCase() === n)) return setErro('Esse motivo já existe.')
     setErro(null)
+    setSalvando(true)
     try {
       await novoMotivo(c, n, Math.max(0, ...(lista ?? []).map((m) => m.ordem)) + 1)
       setNome('')
       await carregar()
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
   async function alternar(m: Motivo) {
+    if (salvando) return
     setErro(null)
+    setSalvando(true)
     try {
       await salvarMotivo(c, { ...m, ativo: !m.ativo })
       await carregar()
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
@@ -52,7 +62,9 @@ export function Motivos({ c }: { c: SupabaseClient }) {
         <label className="cfg__rotulo" htmlFor="mot-nome">Novo motivo</label>
         <div className="cfg__inline-linha">
           <input id="mot-nome" className="cfg__entrada" value={nome} onChange={(e) => setNome(e.target.value)} autoComplete="off" />
-          <button type="submit" className="cfg__botao cfg__botao--forte">Acrescentar</button>
+          <button type="submit" className="cfg__botao cfg__botao--forte" disabled={salvando}>
+            {salvando ? 'Salvando...' : 'Acrescentar'}
+          </button>
         </div>
       </form>
       {erro && (
@@ -69,7 +81,7 @@ export function Motivos({ c }: { c: SupabaseClient }) {
               <li key={m.id} className={m.ativo ? '' : 'cfg__off'}>
                 <span className="cfg__item-nome">{m.nome}</span>
                 <span className="cfg__item-sit">{m.ativo ? 'Ativo' : 'Inativo'}</span>
-                <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void alternar(m)} aria-label={`${m.ativo ? 'Desativar' : 'Reativar'} ${m.nome}`}>
+                <button type="button" className="cfg__botao cfg__botao--p" disabled={salvando} onClick={() => void alternar(m)} aria-label={`${m.ativo ? 'Desativar' : 'Reativar'} ${m.nome}`}>
                   {m.ativo ? 'Desativar' : 'Reativar'}
                 </button>
               </li>

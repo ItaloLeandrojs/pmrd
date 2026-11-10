@@ -110,6 +110,7 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
                     </div>
                     <div className="cfg__acoes">
                       <button type="button" className="cfg__botao cfg__botao--p"
+                        aria-expanded={redefinindo === u.id} aria-controls={`us-redefinir-${u.id}`}
                         onClick={() => { setRedefinindo(redefinindo === u.id ? null : u.id); setSenhaNova('') }}>
                         Redefinir senha
                       </button>
@@ -128,11 +129,11 @@ export function Usuarios({ c, meuId }: { c: SupabaseClient; meuId: string }) {
                         : <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void pedir({ acao: 'reativar', id: u.id }, 'Conta reativada.')}>Reativar</button>)}
                     </div>
                     {redefinindo === u.id && (
-                      <form className="cfg__redefinir" onSubmit={(e) => void redefinir(e, u.id)} noValidate>
+                      <form id={`us-redefinir-${u.id}`} className="cfg__redefinir" onSubmit={(e) => void redefinir(e, u.id)} noValidate>
                         <label className="cfg__rotulo" htmlFor={`us-nova-${u.id}`}>Senha provisória</label>
                         <div className="cfg__inline-linha">
                           <input id={`us-nova-${u.id}`} className="cfg__entrada cfg__mono" value={senhaNova}
-                            onChange={(e) => setSenhaNova(e.target.value)} autoComplete="off" />
+                            onChange={(e) => setSenhaNova(e.target.value)} autoComplete="off" autoFocus />
                           <button type="submit" className="cfg__botao cfg__botao--forte">Salvar senha</button>
                         </div>
                       </form>

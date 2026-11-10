@@ -1,6 +1,7 @@
 // Lista com edição otimista: a linha muda na hora e volta atrás, com aviso, se o servidor não aceitar.
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ResultadoGravacao } from './carteira'
+import { avisarFora } from './avisoFora'
 import { mensagemDeErro } from './erros'
 
 const AVISO_MS = 7000
@@ -20,6 +21,18 @@ export function useListaOtimista<T extends object, K extends keyof T>(inicial: T
   const [aviso, setAviso] = useState<string | null>(null)
   const [pendentes, setPendentes] = useState<ReadonlySet<T[K]>>(new Set())
   const filas = useRef(new Map<T[K], { ops: Operacao<T>[]; rodando: boolean }>())
+
+  // A fila continua enviando depois que a pessoa troca de tela; o erro então vai para a casca.
+  const montado = useRef(true)
+  useEffect(() => {
+    montado.current = true
+    return () => { montado.current = false }
+  }, [])
+
+  const avisar = (id: T[K], mensagem: string) => {
+    if (montado.current) setAviso(mensagem)
+    else avisarFora(`${String(id)}: ${mensagem}`)
+  }
 
   useEffect(() => {
     if (aviso === null) return
@@ -75,10 +88,10 @@ export function useListaOtimista<T extends object, K extends keyof T>(inicial: T
       } else if (r.motivo === 'conflito' && r.atual) {
         descartarFila(id, false)
         trocar(id, () => r.atual as unknown as T)
-        setAviso(r.mensagem)
+        avisar(id, r.mensagem)
       } else {
         descartarFila(id, true)
-        setAviso(r.mensagem)
+        avisar(id, r.mensagem)
       }
       marcarPendentes()
     }

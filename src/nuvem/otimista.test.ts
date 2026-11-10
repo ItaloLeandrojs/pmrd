@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { ProjetoLinha, ResultadoGravacao } from './carteira'
 import { useListaOtimista } from './otimista'
+import { fecharAvisoFora, useAvisoFora } from './avisoFora'
 
 function linha(p: string, etapa: ProjetoLinha['etapa'] = 'EM ANÁLISE', em = 'v1'): ProjetoLinha {
   return {
@@ -161,5 +162,18 @@ describe('useListaOtimista: fila por linha', () => {
     expect(result.current.pendentes.has('EXEMPLO-001')).toBe(true)
     await act(async () => { solta({ ok: true, linha: linha('EXEMPLO-001', 'PROGRAMADA', 'v2') }); await p })
     expect(result.current.pendentes.has('EXEMPLO-001')).toBe(false)
+  })
+
+  it('falha depois de sair da tela: o aviso vai para a casca com o nome do projeto', async () => {
+    const { result, unmount } = renderHook(() => useListaOtimista([linha('EXEMPLO-001')], 'projeto'))
+    const casca = renderHook(() => useAvisoFora())
+    let solta!: (r: ResultadoGravacao) => void
+    let promessa!: Promise<void>
+    act(() => { promessa = result.current.gravar('EXEMPLO-001', { etapa: 'PROGRAMADA' }, () => new Promise((res) => { solta = res })) })
+    unmount()
+    await act(async () => { solta(REDE); await promessa })
+    expect(casca.result.current).toBe('EXEMPLO-001: Não salvou: sem conexão. A mudança foi desfeita.')
+    act(() => fecharAvisoFora())
+    expect(casca.result.current).toBeNull()
   })
 })

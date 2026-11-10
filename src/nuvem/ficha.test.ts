@@ -133,10 +133,33 @@ describe('criarProjetoManual', () => {
     })
   })
 
-  it('sem rede ao gravar o projeto: mensagem de conexão, sem lançar', async () => {
-    const { c } = clienteFalso({ 'projetos.insert': new TypeError('Failed to fetch') })
+  it('sem rede ao gravar o projeto e ele não está no banco: mensagem de conexão, sem lançar', async () => {
+    const { c } = clienteFalso({
+      'projetos.insert': new TypeError('Failed to fetch'),
+      'projetos.select.unico': { data: null, error: null },
+    })
     const r = await criarProjetoManual(c, novo)
     expect(r).toEqual({ ok: false, erro: 'Não salvou: sem conexão. Confira a internet ou a VPN.' })
+  })
+
+  it('tempo limite mas o projeto entrou: confere no banco, segue para os defeitos e dá certo', async () => {
+    const tempo = Object.assign(new Error('signal timed out'), { name: 'TimeoutError' })
+    const { c, chamadas } = clienteFalso({
+      'projetos.insert': tempo,
+      'projetos.select.unico': { data: { projeto: 'RESU-EXEMPLO01' }, error: null },
+      'defeitos.insert': { error: null },
+    })
+    const r = await criarProjetoManual(c, novo)
+    expect(r).toEqual({ ok: true })
+    expect(chamadas.filter((x) => x.op === 'insert').map((x) => x.tabela)).toEqual(['projetos', 'defeitos'])
+  })
+
+  it('tempo limite e nem a conferência responde: diz que não dá para saber e pede para procurar antes de repetir', async () => {
+    const tempo = Object.assign(new Error('signal timed out'), { name: 'TimeoutError' })
+    const { c } = clienteFalso({ 'projetos.insert': tempo, 'projetos.select.unico': tempo })
+    const r = await criarProjetoManual(c, novo)
+    expect(r.ok).toBe(false)
+    expect(!r.ok && r.erro).toMatch(/não dá para saber se o projeto entrou/)
   })
 
   it('sem rede ao gravar os defeitos: projeto entrou sem os ID GOM, com o motivo', async () => {

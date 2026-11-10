@@ -1,6 +1,8 @@
 // Casca do app: menu, barra do topo com o seletor de regional, e a tela ativa.
 import { useCallback, useEffect, useState, type ComponentType } from 'react'
+import { WarningCircle, X } from '@phosphor-icons/react'
 import type { FiltroRegional, Regional, Tema } from '../dominio/tipos'
+import { fecharAvisoFora, useAvisoFora } from '../nuvem/avisoFora'
 import { nuvem } from '../nuvem/cliente'
 import { guardarPreferencias, type Perfil } from '../nuvem/perfil'
 import { EmConstrucao } from './EmConstrucao'
@@ -34,6 +36,7 @@ export function Casca({ perfil, telas, aoSair }: Props) {
   const [regional, setRegional] = useState<FiltroRegional>(perfil.regional_preferida)
   const [ultimaUnica, setUltimaUnica] = useState<Regional>(() => lerUltimaUnica(perfil.regional_preferida))
   const [tema, setTema] = useState<Tema>(perfil.tema)
+  const avisoFora = useAvisoFora()
 
   useEffect(() => {
     const ao = () => setRota(lerRota(window.location.hash))
@@ -87,6 +90,15 @@ export function Casca({ perfil, telas, aoSair }: Props) {
           <h1 className="topo__titulo">{tela.nome}</h1>
           <SeletorRegional valor={regionalDaTela} aceitaTodas={tela.aceitaTodas} aoEscolher={escolherRegional} />
         </header>
+        {avisoFora && (
+          <div className="cart__aviso casca__aviso" role="alert">
+            <WarningCircle size={18} weight="bold" aria-hidden="true" />
+            <span>{avisoFora}</span>
+            <button type="button" className="cart__aviso-x" aria-label="Fechar aviso" onClick={fecharAvisoFora}>
+              <X size={16} weight="bold" aria-hidden="true" />
+            </button>
+          </div>
+        )}
         <main className="casca__tela">
           {Conteudo ? <Conteudo regional={regionalDaTela} /> : (
             <EmConstrucao nome={tela.nome} plano={tela.plano > 1 ? tela.plano : undefined} />

@@ -74,6 +74,8 @@ export function Equipes({ c }: { c: SupabaseClient }) {
     if (salvando) return
     if (!lid) return setErro('Falta o LID da equipe.')
     if (!r.chefe.trim()) return setErro('Falta o chefe de turma.')
+    // Sem a lista carregada não dá para conferir LID repetido: espera.
+    if (r.novo && lista === null) return setErro('Espere a lista de equipes carregar.')
     // Equipe nova não pode sobrescrever uma existente (o upsert apagaria foto e dados).
     if (r.novo && lista?.some((x) => x.lid.trim().toUpperCase() === lid)) return setErro('Esse LID já existe. Use Editar.')
     setErro(null)
@@ -93,12 +95,16 @@ export function Equipes({ c }: { c: SupabaseClient }) {
   }
 
   async function alternar(eq: Equipe) {
+    if (salvando) return
     setErro(null)
+    setSalvando(true)
     try {
       await salvarEquipe(c, { ...eq, ativa: !eq.ativa })
       await carregar()
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
@@ -141,7 +147,7 @@ export function Equipes({ c }: { c: SupabaseClient }) {
           </p>
         )}
         <div className="cfg__acoes">
-          <button type="submit" className="cfg__botao cfg__botao--forte" disabled={salvando}>
+          <button type="submit" className="cfg__botao cfg__botao--forte" disabled={salvando || (r.novo && lista === null)}>
             {salvando ? 'Salvando...' : 'Salvar equipe'}
           </button>
           {!r.novo && <button type="button" className="cfg__botao" onClick={() => { setR(VAZIO); setErro(null) }}>Cancelar</button>}
@@ -165,7 +171,7 @@ export function Equipes({ c }: { c: SupabaseClient }) {
                     <td>{eq.ativa ? 'Ativa' : 'Inativa'}</td>
                     <td className="cfg__cel-acoes">
                       <button type="button" className="cfg__botao cfg__botao--p" onClick={() => editar(eq)} aria-label={`Editar ${eq.lid}`}>Editar</button>
-                      <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void alternar(eq)} aria-label={`${eq.ativa ? 'Desativar' : 'Reativar'} ${eq.lid}`}>
+                      <button type="button" className="cfg__botao cfg__botao--p" disabled={salvando} onClick={() => void alternar(eq)} aria-label={`${eq.ativa ? 'Desativar' : 'Reativar'} ${eq.lid}`}>
                         {eq.ativa ? 'Desativar' : 'Reativar'}
                       </button>
                     </td>

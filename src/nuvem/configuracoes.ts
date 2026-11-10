@@ -1,6 +1,13 @@
 // Leitura e gravação das configurações (só administrador grava; o banco garante).
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Papel, Regional, TipoEquipe } from '../dominio/tipos'
+import { NadaGravado } from './erros'
+
+/** Toda gravação pede as linhas de volta: 0 linhas = o banco recusou em silêncio (RLS). */
+function conferir(r: { data: unknown[] | null; error: unknown }): void {
+  if (r.error) throw r.error
+  if (!r.data || r.data.length === 0) throw new NadaGravado()
+}
 
 export interface Equipe {
   lid: string
@@ -45,8 +52,7 @@ export async function listarEquipes(c: SupabaseClient): Promise<Equipe[]> {
 }
 
 export async function salvarEquipe(c: SupabaseClient, e: Equipe): Promise<void> {
-  const { error } = await c.from('equipes').upsert(e, { onConflict: 'lid' })
-  if (error) throw error
+  conferir(await c.from('equipes').upsert(e, { onConflict: 'lid' }).select('lid'))
 }
 
 export async function listarMotivos(c: SupabaseClient): Promise<Motivo[]> {
@@ -56,14 +62,12 @@ export async function listarMotivos(c: SupabaseClient): Promise<Motivo[]> {
 }
 
 export async function novoMotivo(c: SupabaseClient, nome: string, ordem: number): Promise<void> {
-  const { error } = await c.from('motivos').insert({ nome, ordem, ativo: true })
-  if (error) throw error
+  conferir(await c.from('motivos').insert({ nome, ordem, ativo: true }).select('id'))
 }
 
 /** Motivo nunca se apaga: o histórico do Report usa o nome. Só muda nome, ordem e ativo. */
 export async function salvarMotivo(c: SupabaseClient, m: Motivo): Promise<void> {
-  const { error } = await c.from('motivos').update({ nome: m.nome, ordem: m.ordem, ativo: m.ativo }).eq('id', m.id)
-  if (error) throw error
+  conferir(await c.from('motivos').update({ nome: m.nome, ordem: m.ordem, ativo: m.ativo }).eq('id', m.id).select('id'))
 }
 
 export async function listarSolicitantes(c: SupabaseClient): Promise<Solicitante[]> {
@@ -73,14 +77,12 @@ export async function listarSolicitantes(c: SupabaseClient): Promise<Solicitante
 }
 
 export async function novoSolicitante(c: SupabaseClient, nome: string, email: string | null): Promise<void> {
-  const { error } = await c.from('solicitantes_sgd').insert({ nome, email, ativo: true })
-  if (error) throw error
+  conferir(await c.from('solicitantes_sgd').insert({ nome, email, ativo: true }).select('id'))
 }
 
 /** Solicitante nunca se apaga: só se desativa. */
 export async function salvarSolicitante(c: SupabaseClient, s: Solicitante): Promise<void> {
-  const { error } = await c.from('solicitantes_sgd').update({ nome: s.nome, email: s.email, ativo: s.ativo }).eq('id', s.id)
-  if (error) throw error
+  conferir(await c.from('solicitantes_sgd').update({ nome: s.nome, email: s.email, ativo: s.ativo }).eq('id', s.id).select('id'))
 }
 
 export async function carregarParametros(c: SupabaseClient): Promise<Parametros> {
@@ -90,8 +92,7 @@ export async function carregarParametros(c: SupabaseClient): Promise<Parametros>
 }
 
 export async function salvarParametros(c: SupabaseClient, p: Parametros): Promise<void> {
-  const { error } = await c.from('parametros').update(p).eq('id', 1)
-  if (error) throw error
+  conferir(await c.from('parametros').update(p).eq('id', 1).select('id'))
 }
 
 export async function listarUsuarios(c: SupabaseClient): Promise<Usuario[]> {

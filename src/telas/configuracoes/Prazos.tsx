@@ -19,6 +19,7 @@ export function Prazos({ c }: { c: SupabaseClient }) {
   const [valores, setValores] = useState<Record<keyof Parametros, string> | null>(null)
   const [erro, setErro] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
+  const [salvando, setSalvando] = useState(false)
 
   useEffect(() => {
     let vivo = true
@@ -33,7 +34,7 @@ export function Prazos({ c }: { c: SupabaseClient }) {
 
   async function gravar(e: FormEvent) {
     e.preventDefault()
-    if (!valores) return
+    if (!valores || salvando) return
     setOk(false)
     const p = {} as Parametros
     for (const { chave, rotulo } of CAMPOS) {
@@ -42,11 +43,14 @@ export function Prazos({ c }: { c: SupabaseClient }) {
       p[chave] = Number(t)
     }
     setErro(null)
+    setSalvando(true)
     try {
       await salvarParametros(c, p)
       setOk(true)
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
@@ -70,7 +74,9 @@ export function Prazos({ c }: { c: SupabaseClient }) {
       {erro && <p className="cfg__erro" role="alert"><WarningCircle size={18} weight="bold" aria-hidden="true" />{erro}</p>}
       {ok && <p className="cfg__ok" role="status"><CheckCircle size={18} weight="bold" aria-hidden="true" />Prazos salvos.</p>}
       <div className="cfg__acoes">
-        <button type="submit" className="cfg__botao cfg__botao--forte">Salvar prazos</button>
+        <button type="submit" className="cfg__botao cfg__botao--forte" disabled={salvando}>
+          {salvando ? 'Salvando...' : 'Salvar prazos'}
+        </button>
       </div>
     </form>
   )

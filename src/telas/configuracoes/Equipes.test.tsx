@@ -82,4 +82,14 @@ describe('Equipes', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('Esse LID já existe. Use Editar.')
     expect(salvarEquipe).not.toHaveBeenCalled()
   })
+
+  it('com a lista ainda carregando, Salvar equipe fica travado e não grava', async () => {
+    vi.mocked(listarEquipes).mockReturnValue(new Promise(() => {}))
+    render(<Equipes c={c} />)
+    await userEvent.type(screen.getByLabelText('LID'), 'JZN-ML-99X')
+    await userEvent.type(screen.getByLabelText('Chefe de turma'), 'EXEMPLO')
+    const salvar = screen.getByRole('button', { name: 'Salvar equipe' }) as HTMLButtonElement
+    expect(salvar.disabled).toBe(true)
+    expect(salvarEquipe).not.toHaveBeenCalled()
+  })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mensagemDeErro } from './erros'
+import { CONTA_DESATIVADA, NadaGravado, mensagemDeErro } from './erros'
 
 describe('mensagemDeErro', () => {
   it('traduz credenciais inválidas', () => {
@@ -9,6 +9,13 @@ describe('mensagemDeErro', () => {
     expect(mensagemDeErro(new TypeError('Failed to fetch'))).toBe(
       'Sem conexão com o servidor. Confira a internet ou a VPN.',
     )
+  })
+  it('traduz conta desativada (banned) pelo código e pela frase', () => {
+    expect(mensagemDeErro({ code: 'user_banned', message: 'x' })).toBe(CONTA_DESATIVADA)
+    expect(mensagemDeErro({ message: 'User is banned' })).toBe(CONTA_DESATIVADA)
+  })
+  it('avisa quando o banco não gravou nenhuma linha', () => {
+    expect(mensagemDeErro(new NadaGravado())).toMatch(/^Não foi gravado\./)
   })
   it('usa frase genérica para o desconhecido', () => {
     expect(mensagemDeErro(new Error('xyz'))).toBe('Algo deu errado. Tente de novo.')

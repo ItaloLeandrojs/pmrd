@@ -10,6 +10,8 @@ export function Solicitantes({ c }: { c: SupabaseClient }) {
   const [nome, setNome] = useState('')
   const [email, setEmail] = useState('')
   const [erro, setErro] = useState<string | null>(null)
+  // Uma gravação por vez: o duplo clique não pode criar dois iguais.
+  const [salvando, setSalvando] = useState(false)
 
   const carregar = useCallback(async () => {
     try {
@@ -24,8 +26,10 @@ export function Solicitantes({ c }: { c: SupabaseClient }) {
 
   async function acrescentar(e: FormEvent) {
     e.preventDefault()
+    if (salvando) return
     if (!nome.trim()) return setErro('Escreva o nome do solicitante.')
     setErro(null)
+    setSalvando(true)
     try {
       await novoSolicitante(c, nome.trim(), email.trim() || null)
       setNome('')
@@ -33,16 +37,22 @@ export function Solicitantes({ c }: { c: SupabaseClient }) {
       await carregar()
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
   async function alternar(s: Solicitante) {
+    if (salvando) return
     setErro(null)
+    setSalvando(true)
     try {
       await salvarSolicitante(c, { ...s, ativo: !s.ativo })
       await carregar()
     } catch (err) {
       setErro(mensagemDeErro(err))
+    } finally {
+      setSalvando(false)
     }
   }
 
@@ -60,7 +70,9 @@ export function Solicitantes({ c }: { c: SupabaseClient }) {
           </div>
         </div>
         <div className="cfg__acoes">
-          <button type="submit" className="cfg__botao cfg__botao--forte">Acrescentar</button>
+          <button type="submit" className="cfg__botao cfg__botao--forte" disabled={salvando}>
+            {salvando ? 'Salvando...' : 'Acrescentar'}
+          </button>
         </div>
       </form>
       {erro && (
@@ -77,7 +89,7 @@ export function Solicitantes({ c }: { c: SupabaseClient }) {
               <li key={s.id} className={s.ativo ? '' : 'cfg__off'}>
                 <span className="cfg__item-nome">{s.nome}{s.email && <span className="cfg__item-sub">{s.email}</span>}</span>
                 <span className="cfg__item-sit">{s.ativo ? 'Ativo' : 'Inativo'}</span>
-                <button type="button" className="cfg__botao cfg__botao--p" onClick={() => void alternar(s)} aria-label={`${s.ativo ? 'Desativar' : 'Reativar'} ${s.nome}`}>
+                <button type="button" className="cfg__botao cfg__botao--p" disabled={salvando} onClick={() => void alternar(s)} aria-label={`${s.ativo ? 'Desativar' : 'Reativar'} ${s.nome}`}>
                   {s.ativo ? 'Desativar' : 'Reativar'}
                 </button>
               </li>
