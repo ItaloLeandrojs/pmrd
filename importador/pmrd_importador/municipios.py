@@ -4,6 +4,8 @@ import json
 import urllib.request
 from pathlib import Path
 
+from .colunas import normalizar_nome
+
 URL_MALHA = ("https://servicodados.ibge.gov.br/api/v3/malhas/estados/23"
              "?formato=application/vnd.geo+json&intrarregiao=municipio&qualidade=intermediaria")
 URL_NOMES = "https://servicodados.ibge.gov.br/api/v1/localidades/estados/23/municipios"
@@ -50,6 +52,13 @@ class Municipios:
             lats = [p[1] for p in pontos]
             areas.append((nome, (min(lngs), min(lats), max(lngs), max(lats)), poligonos))
         return cls(areas)
+
+    def nome_oficial(self, texto: str | None) -> str | None:
+        """O nome da malha que casa com o texto (sem acento e caixa), ou None."""
+        alvo = normalizar_nome(texto)
+        if not alvo:
+            return None
+        return next((nome for nome, _, _ in self._areas if normalizar_nome(nome) == alvo), None)
 
     def municipio_de(self, lat: float, lng: float) -> str | None:
         for nome, (x0, y0, x1, y1), poligonos in self._areas:

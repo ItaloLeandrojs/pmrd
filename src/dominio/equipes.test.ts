@@ -2,8 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { baseDoLid, BASES, grupoSugerido } from './equipes'
 
 describe('equipes', () => {
-  it('tem as 5 bases', () => {
-    expect(Object.keys(BASES)).toEqual(['JZN', 'MLG', 'ICO', 'IGT', 'CPS'])
+  it('tem as 7 bases (SNP e TAA desde 11/11)', () => {
+    expect(Object.keys(BASES)).toEqual(['JZN', 'MLG', 'ICO', 'IGT', 'CPS', 'SNP', 'TAA'])
+    expect(BASES.SNP).toBe('Senador Pompeu')
+    expect(BASES.TAA).toBe('Tauá')
+  })
+  it('SNP e TAA dão base e grupo', () => {
+    expect(baseDoLid('SNP-COS-99X')).toBe('SNP')
+    expect(baseDoLid('TAA-ML-99X')).toBe('TAA')
+    expect(grupoSugerido('ML', 'SNP')).toBe('ML Senador Pompeu')
+    expect(grupoSugerido('ML', 'TAA')).toBe('ML Tauá')
   })
   it('baseDoLid pega o prefixo conhecido', () => {
     expect(baseDoLid('JZN-ML-99X')).toBe('JZN')

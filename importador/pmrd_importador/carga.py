@@ -18,8 +18,9 @@ from .prioridade import prioridade_da_demanda
 from .principal import ENV_PADRAO, MALHA_PADRAO, REGIONAIS, _achar_arquivo, _ler_env
 
 # Igual a BASES de src/dominio/equipes.ts.
-BASES = {"JZN": "Juazeiro", "MLG": "Milagres", "ICO": "Icó", "IGT": "Iguatu", "CPS": "Campos Sales"}
-REGIONAL_DA_BASE = {"JZN": "SUL", "MLG": "SUL", "CPS": "SUL", "ICO": "CS", "IGT": "CS"}
+BASES = {"JZN": "Juazeiro", "MLG": "Milagres", "ICO": "Icó", "IGT": "Iguatu", "CPS": "Campos Sales",
+         "SNP": "Senador Pompeu", "TAA": "Tauá"}
+REGIONAL_DA_BASE = {"JZN": "SUL", "MLG": "SUL", "CPS": "SUL", "ICO": "CS", "IGT": "CS", "SNP": "CS", "TAA": "CS"}
 TIPOS = ("ML", "LVR", "MP", "LV")
 
 ETAPAS = (
@@ -102,6 +103,18 @@ def _inteiro(v: object) -> tuple[int | None, bool]:
     return (int(t), True) if re.fullmatch(r"\d+", t) else (None, False)
 
 
+def _soma_por_linha(v: object) -> tuple[int | None, bool]:
+    """Um número por linha da célula: a soma (linhas vazias não contam)."""
+    if not isinstance(v, str):
+        return _inteiro(v)
+    partes = [p.strip() for p in v.splitlines() if p.strip()]
+    if not partes:
+        return None, True
+    if not all(re.fullmatch(r"\d+", p) for p in partes):
+        return None, False
+    return sum(int(p) for p in partes), True
+
+
 def _aba(wb, aba: str, caminho: Path, obrigatorias) -> tuple[dict[str, int], list[tuple]]:
     """Cabeçalho na linha 1. Devolve ({coluna: índice}, linhas de dados)."""
     if aba not in wb.sheetnames:
@@ -123,7 +136,9 @@ def _celula(linha: tuple, idx: int):
 
 def ler_carteira_xlsm(caminho: Path) -> list[dict]:
     """Aba CARTEIRA: uma linha por projeto (linha sem PROJETO é ignorada).
-    Cada linha traz também 'linha' (número na planilha) e 'avisos'."""
+    Cada linha traz também 'linha' (número na planilha), 'avisos' e
+    'defeitos_xlsm' [{id_gom, prioridade_nome, estrutura}], com a prioridade e a
+    estrutura alinhadas aos IDs pelas linhas cruas da célula ID GOM."""
     caminho = Path(caminho)
     wb = abrir(caminho)
     try:
@@ -135,32 +150,45 @@ def ler_carteira_xlsm(caminho: Path) -> list[dict]:
         projeto = _texto(_celula(linha, mapa["PROJETO"]))
         if projeto is None or projeto == "0":
             continue
+        onde = f"Projeto {projeto} (linha {n} do xlsm)"
         item: dict = {"linha": n, "avisos": []}
         for coluna, chave in COLUNAS_CARTEIRA.items():
             v = _celula(linha, mapa[coluna])
-            if coluna in _LISTAS:
+            if coluna == "PRIORIDADE":
+                # Uma por linha e também separadas por "/" (decisão de 11/11).
+                item[chave] = [p.strip() for x in _linhas(v) for p in x.split("/") if p.strip()]
+            elif coluna in _LISTAS:
                 item[chave] = _linhas(v)
             elif coluna in _DATAS:
                 item[chave], ok = _data(v)
                 if not ok:
-                    item["avisos"].append(f"Projeto {projeto} (linha {n} do xlsm): {coluna} '{v}' "
-                                          "não é data; ficou vazio.")
+                    item["avisos"].append(f"{onde}: {coluna} '{v}' não é data; ficou vazio.")
             elif coluna in _INTEIROS:
-                item[chave], ok = _inteiro(v)
+                item[chave], ok = (_soma_por_linha if coluna == "QTD CLIENTES" else _inteiro)(v)
                 if not ok:
-                    item["avisos"].append(f"Projeto {projeto} (linha {n} do xlsm): {coluna} '{v}' "
-                                          "não é número; ficou vazio.")
+                    item["avisos"].append(f"{onde}: {coluna} '{v}' não é número; ficou vazio.")
             else:
                 item[chave] = _texto(v)
-        ids = []
-        for i in item["ids"]:
-            i = id_texto(i)
-            if i is not None and _ID_GOM.match(i):
-                ids.append(i)
-            else:
-                item["avisos"].append(f"Projeto {projeto} (linha {n} do xlsm): ID GOM '{i}' fora do formato; "
-                                      "ficou de fora.")
-        item["ids"] = ids
+
+        crus, prios, ests = item["ids"], item["prioridades"], item["estruturas"]
+        if len(prios) > 1 and len(prios) != len(crus):
+            item["avisos"].append(f"{onde}: {len(prios)} prioridades para {len(crus)} ID GOM; "
+                                  "defeitos do xlsm sem prioridade.")
+        ids, defeitos = [], []
+        for k, cru in enumerate(crus):
+            i = id_texto(cru)
+            if i is not None and i.endswith(","):
+                i = i[:-1].strip()
+            if i is None or not _ID_GOM.match(i):
+                item["avisos"].append(f"{onde}: ID GOM '{cru}' fora do formato; ficou de fora.")
+                continue
+            ids.append(i)
+            defeitos.append({
+                "id_gom": i,
+                "prioridade_nome": prios[k] if len(prios) == len(crus) else (prios[0] if len(prios) == 1 else None),
+                "estrutura": ests[k] if len(ests) == len(crus) else None,
+            })
+        item["ids"], item["defeitos_xlsm"] = ids, defeitos
         saida.append(item)
     return saida
 
@@ -240,7 +268,19 @@ def montar_carga(carteira: list[dict], demandas: dict[str, Demanda], coords: dic
     presentes = {reg: set(env["presentes"]) for reg, env in envios.items()}
     dono_ativo = {d["id_gom"]: p["projeto"] for env in envios.values()
                   for p in env["projetos"] for d in p["defeitos"]}
+    defeito_ativo = {d["id_gom"]: d for env in envios.values() for p in env["projetos"] for d in p["defeitos"]}
     fechados = {f["id_gom"]: f["estado_enel"] for env in envios.values() for f in env["fechados"]}
+    sem_projeto = {f"SEM-PROJETO-{reg}" for reg in envios}
+    reclamados: set[str] = set()     # IDs do SEM-PROJETO que o PCM já pôs num projeto do xlsm
+
+    regionais_do: dict[str, list[str]] = {}
+    for reg, env in envios.items():
+        for p in env["projetos"]:
+            regionais_do.setdefault(p["projeto"], []).append(reg)
+    for nome, regs in regionais_do.items():
+        if len(regs) > 1:
+            avisos.append(f"Projeto {nome} está ativo na demanda de {' e '.join(regs)}; "
+                          "a carteira guarda um projeto só por nome.")
 
     projetos: list[dict] = []
     linha_do: dict[str, int] = {}
@@ -273,48 +313,58 @@ def montar_carga(carteira: list[dict], demandas: dict[str, Demanda], coords: dic
             if p is None:
                 avisos.append(f"{onde}: prioridade {n} desconhecida.")
             prios.append(p)
-        ids, ests = l["ids"], l["estruturas"]
-        if len(prios) > 1 and len(prios) != len(ids):
-            avisos.append(f"{onde}: {len(prios)} prioridades para {len(ids)} ID GOM; defeitos do xlsm sem prioridade.")
-
-        def prioridade_do(i: int) -> int | None:
-            if len(prios) == len(ids):
-                return prios[i]
-            return prios[0] if len(prios) == 1 else None
 
         enel = nome in presentes.get(regional, set())
         ativo = ativos.get(regional, {}).get(nome) if enel else None
         defeitos = [dict(d) for d in ativo["defeitos"]] if ativo else []
         ja = {d["id_gom"] for d in defeitos}
-        for i, id_gom in enumerate(ids):
+        do_sem_projeto = []
+        for dx in l["defeitos_xlsm"]:
+            id_gom = dx["id_gom"]
             if id_gom in ja:
                 continue
             dono = dono_ativo.get(id_gom)
+            if dono in sem_projeto:
+                # Sem projeto na Enel e o PCM já pôs neste: fica aqui com o que a demanda diz (11/11).
+                ja.add(id_gom)
+                reclamados.add(id_gom)
+                do_sem_projeto.append(dict(defeito_ativo[id_gom]))
+                defeitos.append(do_sem_projeto[-1])
+                continue
             if dono is not None and dono != nome:
                 avisos.append(f"{onde}: o defeito {id_gom} está no projeto {dono} na demanda e fica lá.")
                 continue
             ja.add(id_gom)
             ponto = coords.get(id_gom)
             defeitos.append({
-                "id_gom": id_gom, "prioridade": prioridade_do(i),
-                "estrutura": ests[i] if len(ests) == len(ids) else None,
-                "alimentador": None, "estado_enel": fechados.get(id_gom),
+                "id_gom": id_gom, "prioridade": prioridade_da_demanda(dx["prioridade_nome"]),
+                "estrutura": dx["estrutura"], "alimentador": None, "estado_enel": fechados.get(id_gom),
                 "lat": float(ponto[0]) if ponto else None, "lng": float(ponto[1]) if ponto else None,
             })
 
+        # Enel: a menor dos ativos da demanda do projeto (como o enviar_demanda);
+        # senão, a menor do xlsm e dos defeitos que vieram do SEM-PROJETO.
         da_demanda = [d["prioridade"] for d in (ativo["defeitos"] if ativo else []) if d["prioridade"] is not None]
-        do_xlsm = [p for p in prios if p is not None]
-        prioridade = min(da_demanda) if da_demanda else (min(do_xlsm) if do_xlsm else None)
+        outras = [p for p in prios + [d["prioridade"] for d in do_sem_projeto] if p is not None]
+        prioridade = min(da_demanda) if da_demanda else (min(outras) if outras else None)
+
+        municipio = l["municipio"]
+        if municipio and m is not None:
+            oficial = m.nome_oficial(municipio)
+            if oficial:
+                municipio = oficial
+            else:
+                avisos.append(f"{onde}: município {municipio} não casou com a malha do IBGE; "
+                              "ficou como está no xlsm.")
 
         projetos.append({
             "projeto": nome, "regional": regional, "origem": "enel" if enel else "manual",
             "ot_correcao": l["ot_correcao"],
-            "municipio": l["municipio"] or (ativo["municipio"] if ativo else None)
-            or _municipio_dos_pontos(defeitos, m),
+            "municipio": municipio or (ativo["municipio"] if ativo else None) or _municipio_dos_pontos(defeitos, m),
             "endereco": l["endereco"], "prioridade": prioridade,
             "alimentadores": list(ativo["alimentadores"]) if ativo else [],
             "elemento_corte": l["elemento_corte"], "qtd_clientes": l["qtd_clientes"],
-            "estruturas": ests, "intervencao_prevista": l["intervencao_prevista"], "etapa": etapa,
+            "estruturas": l["estruturas"], "intervencao_prevista": l["intervencao_prevista"], "etapa": etapa,
             "proxima_acao": l["proxima_acao"], "prazo_proxima_acao": l["prazo_proxima_acao"],
             "vistoria_data": l["vistoria_data"], "vistoria_situacao": l["vistoria_situacao"],
             "vistoria_recurso": l["vistoria_recurso"], "vistoria_intervencao": l["vistoria_intervencao"],
@@ -325,8 +375,18 @@ def montar_carga(carteira: list[dict], demandas: dict[str, Demanda], coords: dic
             "defeitos": defeitos,
         })
 
-    so_demanda = [{"regional": reg, **p} for reg, env in envios.items()
-                  for p in env["projetos"] if p["projeto"] not in linha_do]
+    so_demanda = []
+    for reg, env in envios.items():
+        for p in env["projetos"]:
+            if p["projeto"] in linha_do:
+                continue
+            if p["projeto"] in sem_projeto and any(d["id_gom"] in reclamados for d in p["defeitos"]):
+                resto = [d for d in p["defeitos"] if d["id_gom"] not in reclamados]
+                if not resto:
+                    continue
+                p = {**p, "defeitos": resto, "municipio": _municipio_dos_pontos(resto, m),
+                     "alimentadores": list(dict.fromkeys(d["alimentador"] for d in resto if d["alimentador"]))}
+            so_demanda.append({"regional": reg, **p})
     return {"projetos": projetos, "da_demanda": so_demanda, "equipes": _equipes(equipes, avisos),
             "solicitantes": list(solicitantes), "avisos": avisos}
 
@@ -358,7 +418,10 @@ def _ler_tudo(xlsm: Path, pasta: Path, malha) -> dict:
             coords.update(ler_coordenadas(c, ids))
             demandas[regional] = d
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            shutil.rmtree(tmp)
+        except OSError as e:
+            print(f"Aviso: a pasta temporária {tmp} não foi apagada ({e}). Apague à mão.")
     carga = montar_carga(carteira, demandas, coords, malha, equipes, solicitantes)
     carga["arquivo"] = xlsm.name
     return carga
@@ -419,7 +482,7 @@ def main(argv: list[str] | None = None, nuvem=None) -> int:
         print(f"Erro: {e}")
         return 1
     except Exception as e:
-        print(f"Erro inesperado ao ler as planilhas ({type(e).__name__}).")
+        print(f"Erro inesperado ao ler as planilhas ({type(e).__name__}: {e}).")
         return 1
 
     if a.ensaio:

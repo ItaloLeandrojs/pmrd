@@ -1,4 +1,5 @@
 """Leitura da aba DEMANDA MENSAL da planilha da Enel."""
+import re
 from dataclasses import dataclass, field
 from itertools import chain, islice
 from pathlib import Path
@@ -82,8 +83,9 @@ def _texto(v: object) -> str | None:
 
 
 def _projeto(v: object) -> str | None:
+    """Vazio, `0` ou só traços (`---`, decisão de 11/11) = sem projeto."""
     t = id_texto(v) if not isinstance(v, str) else _texto(v)
-    if t is None or t == "0":
+    if t is None or t == "0" or re.fullmatch(r"-+", t):
         return None
     return t
 

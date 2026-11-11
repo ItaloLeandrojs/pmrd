@@ -594,4 +594,68 @@ describe('002_novidades: enviar_demanda', () => {
   it('rodar as migrações de novo continua sem erro', async () => {
     await aplicarMigracoes(db)
   })
+
+  // Decisão D2 de 11/11: defeito sem projeto na Enel que o PCM já pôs num projeto fica no projeto do PCM.
+  it('defeito do SEM-PROJETO que o PCM já pôs num projeto manual não entra no novo', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }], { origem: 'manual' })
+    const envio: Envio = {
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001', '-9000002'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    }
+    expect(await enviar(envio)).toMatchObject({ novo: 1, mudou: 0 })
+    const [n] = await novidades()
+    expect(n).toMatchObject({ projeto: 'SEM-PROJETO-SUL', tipo: 'novo' })
+    expect(idsDe(n.dados.defeitos)).toEqual(['-9000002'])
+    // A mesma planilha de novo: nada novo, a aberta continua a mesma.
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0 })
+    expect(await novidades()).toEqual([n])
+  })
+
+  it('SEM-PROJETO com só defeitos que o PCM já pôs em projeto: nenhuma novidade', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }], { origem: 'manual' })
+    const envio: Envio = { projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001'])], presentes: ['SEM-PROJETO-SUL'] }
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+    expect(await novidades()).toEqual([])
+  })
+
+  it('SEM-PROJETO na carteira não ganha em entram o defeito que o PCM pôs em outro projeto', async () => {
+    await projetoNaCarteira('SEM-PROJETO-SUL', [{ id: '-9000002' }])
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }], { origem: 'manual' })
+    const envio: Envio = {
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001', '-9000002'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    }
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, sem_mudanca: 1 })
+    expect(await novidades()).toEqual([])
+  })
+
+  it('defeito removido de outro projeto volta a contar no SEM-PROJETO', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001', situacao: 'removido' }], { origem: 'manual' })
+    const envio: Envio = { projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001'])], presentes: ['SEM-PROJETO-SUL'] }
+    expect(await enviar(envio)).toMatchObject({ novo: 1 })
+    expect(idsDe((await novidades())[0].dados.defeitos)).toEqual(['-9000001'])
+  })
+
+  it('projeto enel não perde em saem o defeito que no envio veio sem projeto', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002' }])
+    const envio: Envio = {
+      projetos: [projetoEnvio('EXEMPLO-0001', ['-9000001']), projetoEnvio('SEM-PROJETO-SUL', ['-9000002'])],
+      presentes: ['EXEMPLO-0001', 'SEM-PROJETO-SUL'],
+    }
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, sem_mudanca: 1 })
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, sem_mudanca: 1 })
+    expect(await novidades()).toEqual([])
+  })
+
+  it('o grupo sem projeto de outra regional não protege o defeito', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002' }])
+    const resumo = await enviar({
+      projetos: [projetoEnvio('EXEMPLO-0001', ['-9000001']), projetoEnvio('SEM-PROJETO-CS', ['-9000002'])],
+      presentes: ['EXEMPLO-0001', 'SEM-PROJETO-CS'],
+    })
+    expect(resumo).toMatchObject({ mudou: 1 })
+    const mudou = (await novidades()).find((n) => n.tipo === 'mudou')!
+    expect(mudou.dados.saem).toEqual(['-9000002'])
+  })
 })

@@ -149,6 +149,9 @@ grant all on sequence public.importacoes_id_seq, public.novidades_id_seq to serv
 --             programado, por projeto;
 --   saiu      projeto da Enel, não marcado como fora da demanda, fora das
 --             etapas finais, que não aparece na aba.
+-- Defeito do grupo SEM-PROJETO-<regional> que já está em outro projeto (não
+-- removido) fica onde o PCM o pôs: sai do grupo e não conta como "saem"
+-- (decisão de 11/11).
 --
 -- Repetição: a assinatura cobre só os fatos da demanda que pedem decisão,
 -- com as listas sempre na mesma ordem:
@@ -186,6 +189,8 @@ declare
   v_contagem     jsonb := '{"novo": 0, "mudou": 0, "saiu": 0, "corrigido": 0}';
   v_resumo       jsonb;
   v_texto        text;
+  v_sem_projeto  text := 'SEM-PROJETO-' || p_regional;
+  v_ids_sem_proj text[];
 begin
   if not public.eh_importador() then
     raise exception 'Só o importador envia a demanda.';
@@ -287,6 +292,30 @@ begin
   -- Um envio por regional de cada vez.
   perform pg_advisory_xact_lock(hashtext('pmrd.enviar_demanda.' || p_regional));
 
+  -- Sem projeto na Enel (decisão de 11/11): defeito do grupo SEM-PROJETO-<regional>
+  -- que o PCM já pôs em OUTRO projeto (e não removeu) fica no projeto do PCM. Sai
+  -- do grupo antes de tudo (não entra em novo, entram nem na assinatura) e não
+  -- conta como "saem" do projeto onde está só por ter vindo sem projeto.
+  select coalesce(array_agg(d.value ->> 'id_gom'), '{}') into v_ids_sem_proj
+    from jsonb_array_elements(v_projetos) e,
+         jsonb_array_elements(coalesce(e.value -> 'defeitos', '[]'::jsonb)) d
+   where e.value ->> 'projeto' = v_sem_projeto;
+
+  select coalesce(jsonb_agg(
+           case when e.value ->> 'projeto' = v_sem_projeto
+                then jsonb_set(e.value, '{defeitos}', (
+                       select coalesce(jsonb_agg(d.value order by d.n), '[]'::jsonb)
+                         from jsonb_array_elements(coalesce(e.value -> 'defeitos', '[]'::jsonb))
+                              with ordinality as d (value, n)
+                        where not exists (select 1 from public.defeitos x
+                                           where x.id_gom = d.value ->> 'id_gom'
+                                             and x.projeto <> v_sem_projeto
+                                             and x.situacao <> 'removido')))
+                else e.value end
+           order by e.n), '[]'::jsonb)
+    into v_projetos
+    from jsonb_array_elements(v_projetos) with ordinality as e (value, n);
+
   -- Projeto ativo que está na carteira de outra regional: fica de fora, com aviso.
   select coalesce(jsonb_agg(to_jsonb(format(
            'O projeto %s está na carteira do %s e ficou de fora deste envio.', p.projeto, p.regional))
@@ -327,6 +356,8 @@ begin
                                where jsonb_typeof(d.value -> 'prioridade') = 'number')) as chave
         from envio en
        where not exists (select 1 from public.projetos p where p.projeto = en.projeto)
+         -- SEM-PROJETO que ficou vazio (todos já estão em projetos do PCM): nada novo.
+         and not (en.projeto = v_sem_projeto and jsonb_array_length(en.defeitos) = 0)
     ),
     mudancas as (
       select en.projeto, p.prioridade as prioridade_antes,
@@ -356,6 +387,7 @@ begin
            where x.projeto = en.projeto
              and x.situacao in ('pendente', 'programado')
              and not (x.id_gom = any (v_ids_fechados))
+             and not (x.id_gom = any (v_ids_sem_proj))
              and not exists (select 1 from jsonb_array_elements(en.defeitos) d
                               where d.value ->> 'id_gom' = x.id_gom)
         ) sa

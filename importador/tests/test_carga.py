@@ -1,5 +1,7 @@
 import json
+import tempfile
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
@@ -267,10 +269,142 @@ def test_main_sem_planilha_de_uma_regional_e_erro(tmp_path, capsys):
     assert "01_" in capsys.readouterr().out
 
 
-def test_main_nao_deixa_copia_nem_mexe_no_xlsm(tmp_path):
+def test_main_nao_deixa_copia_nem_mexe_no_xlsm(tmp_path, monkeypatch):
     args = preparar(tmp_path)
+    temporaria = tmp_path / "temporaria"
+    temporaria.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temporaria))
+    criadas = []
+    criar = tempfile.mkdtemp
+
+    def espiar(*a, **k):
+        criadas.append(criar(*a, **k))
+        return criadas[-1]
+    monkeypatch.setattr(tempfile, "mkdtemp", espiar)
     xlsm = tmp_path / "controle.xlsm"
     antes = xlsm.read_bytes()
     assert main(["--ensaio", *args], nuvem=NuvemFalsa()) == 0
     assert xlsm.read_bytes() == antes
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["controle.xlsm", "demanda", "malha.geojson"]
+    assert criadas and all(Path(c).parent == temporaria for c in criadas)   # a cópia foi feita lá
+    assert list(temporaria.iterdir()) == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["controle.xlsm", "demanda", "malha.geojson", "temporaria"]
+
+
+def test_main_copia_presa_avisa(tmp_path, monkeypatch, capsys):
+    args = preparar(tmp_path)
+
+    apagar = carga.shutil.rmtree
+
+    def falha(caminho, *a, **k):
+        apagar(caminho)          # apaga de verdade e finge que falhou
+        raise OSError("EXEMPLO: arquivo em uso")
+    monkeypatch.setattr(carga.shutil, "rmtree", falha)
+    assert main(["--ensaio", *args], nuvem=NuvemFalsa()) == 0
+    assert "não foi apagada" in capsys.readouterr().out
+
+
+def test_main_erro_inesperado_mostra_tipo_e_mensagem(tmp_path, monkeypatch, capsys):
+    args = preparar(tmp_path)
+
+    def falha(*a, **k):
+        raise ValueError("EXEMPLO de falha")
+    monkeypatch.setattr(carga, "ler_lista_xlsm", falha)
+    assert main(["--ensaio", *args], nuvem=NuvemFalsa()) == 1
+    assert "ValueError: EXEMPLO de falha" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- decisões de 11/11
+
+def test_d2_id_do_xlsm_no_sem_projeto_fica_no_projeto_do_xlsm(tmp_path):
+    car = [linha_carteira(PROJETO="EXEMPLO-0002", **{"ID GOM": "-9000008", "PRIORIDADE": "WTS"})]
+    demandas = vazias()
+    demandas["SUL"] = Demanda([defeito("-9000008", None, demanda="TLC"), defeito("-9000010", None)])
+    c = montar(tmp_path, carteira=car, demandas=demandas, coords={"-9000008": (-7.2, -39.4)})
+    [p] = c["projetos"]
+    assert p["origem"] == "manual"
+    [d] = p["defeitos"]
+    assert d == {"id_gom": "-9000008", "prioridade": 5, "estrutura": "EXEMPLO-EST", "alimentador": "EXE01S1",
+                 "estado_enel": "PENDENTE", "lat": -7.2, "lng": -39.4}
+    [sem] = c["da_demanda"]
+    assert sem["projeto"] == "SEM-PROJETO-SUL"
+    assert [x["id_gom"] for x in sem["defeitos"]] == ["-9000010"]
+    assert not any("-9000008" in a for a in c["avisos"])
+
+
+def test_d2_sem_projeto_que_fica_vazio_nao_entra(tmp_path):
+    car = [linha_carteira(PROJETO="EXEMPLO-0002", **{"ID GOM": "-9000008"})]
+    demandas = vazias()
+    demandas["SUL"] = Demanda([defeito("-9000008", None)])
+    c = montar(tmp_path, carteira=car, demandas=demandas, coords={})
+    assert c["da_demanda"] == []
+    assert [d["id_gom"] for d in c["projetos"][0]["defeitos"]] == ["-9000008"]
+
+
+def test_d3_prioridade_separada_por_barra(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000001\n-9000002", "PRIORIDADE": "Conj Crítico / WTS"})]
+    [l] = ler_carteira_xlsm(criar_xlsm(tmp_path, carteira=car))
+    assert l["prioridades"] == ["Conj Crítico", "WTS"]
+    c = montar_carga([l], vazias(), {}, MALHA, [], [])
+    assert [d["prioridade"] for d in c["projetos"][0]["defeitos"]] == [7, 9]
+    assert c["projetos"][0]["prioridade"] == 7
+    assert not any("desconhecida" in a for a in c["avisos"])
+
+
+def test_d3_id_gom_com_virgula_no_fim(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000001,\n-9000002\n-9000003;"})]
+    [l] = ler_carteira_xlsm(criar_xlsm(tmp_path, carteira=car))
+    assert l["ids"] == ["-9000001", "-9000002"]
+    assert any("-9000003;" in a for a in l["avisos"])
+
+
+@pytest.mark.parametrize("valor,esperado,aviso", [
+    ("85\n3", 88, False), ("\n97\n0", 97, False), (12, 12, False), ("12\nEXEMPLO", None, True)])
+def test_d3_qtd_clientes_um_por_linha_soma(tmp_path, valor, esperado, aviso):
+    [l] = ler_carteira_xlsm(criar_xlsm(tmp_path, carteira=[linha_carteira(**{"QTD CLIENTES": valor})]))
+    assert l["qtd_clientes"] == esperado
+    assert any("QTD CLIENTES" in a for a in l["avisos"]) == aviso
+
+
+def test_d3_municipio_com_o_nome_do_ibge(tmp_path):
+    car = [linha_carteira(MUNICÍPIO="EXEMPLOPOLIS", **{"ID GOM": None}),
+           linha_carteira(PROJETO="EXEMPLO-0002", MUNICÍPIO="Outra Exemplo", **{"ID GOM": None}),
+           linha_carteira(PROJETO="EXEMPLO-0003", MUNICÍPIO="outra exemplo", **{"ID GOM": None})]
+    c = montar(tmp_path, carteira=car, demandas=vazias())
+    p = por_nome(c)
+    assert p["EXEMPLO-0001"]["municipio"] == "Exemplópolis"
+    assert p["EXEMPLO-0002"]["municipio"] == "Outra Exemplo"
+    assert p["EXEMPLO-0003"]["municipio"] == "outra exemplo"
+    sem_par = [a for a in c["avisos"] if "Outra Exemplo" in a or "outra exemplo" in a]
+    assert len(sem_par) == 2
+
+
+def test_d3_prioridade_e_estrutura_alinham_pelas_linhas_cruas(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000001\nEXEMPLO-LIXO\n-9000003", "PRIORIDADE": "Obra\nTLC\nWTS",
+                             "ESTRUTURA": "EXEMPLO-E1\nEXEMPLO-E2\nEXEMPLO-E3"})]
+    c = montar(tmp_path, carteira=car, demandas=vazias(), coords={})
+    ds = c["projetos"][0]["defeitos"]
+    assert [(d["id_gom"], d["prioridade"], d["estrutura"]) for d in ds] == [
+        ("-9000001", 8, "EXEMPLO-E1"), ("-9000003", 9, "EXEMPLO-E3")]
+
+
+def test_d4_bases_snp_e_taa_no_cs(tmp_path):
+    equipes = [
+        {"lid": "SNP-COS-99X", "chefe": "Pessoa Exemplo", "tipo": "MP"},
+        {"lid": "TAA-ML-99X", "chefe": "Pessoa Exemplo", "tipo": "ML"},
+        {"lid": "SNP-RL-99X(SUPLENTE)", "chefe": "Pessoa Exemplo", "tipo": "ML"},
+        {"lid": "XYZ-ML-01", "chefe": "Pessoa Exemplo", "tipo": "ML"},
+    ]
+    c = montar(tmp_path, equipes=equipes)
+    eq = {e["lid"]: (e["regional"], e["base"], e["grupo_report"]) for e in c["equipes"]}
+    assert eq == {"SNP-COS-99X": ("CS", "SNP", "Manutenção Pesada"),
+                  "TAA-ML-99X": ("CS", "TAA", "ML Tauá"),
+                  "SNP-RL-99X(SUPLENTE)": ("CS", "SNP", "ML Senador Pompeu")}
+    assert any("XYZ-ML-01" in a for a in c["avisos"])
+
+
+def test_projeto_ativo_em_duas_regionais_avisa(tmp_path):
+    demandas = vazias()
+    demandas["CS"] = Demanda([defeito("-9000011", "EXEMPLO-0007")])
+    demandas["SUL"] = Demanda([defeito("-9000012", "EXEMPLO-0007")])
+    c = montar(tmp_path, carteira=[], demandas=demandas, coords={})
+    assert any("EXEMPLO-0007" in a and "CS" in a and "SUL" in a for a in c["avisos"])

@@ -6,6 +6,8 @@ export const BASES: Record<string, string> = {
   ICO: 'Icó',
   IGT: 'Iguatu',
   CPS: 'Campos Sales',
+  SNP: 'Senador Pompeu',
+  TAA: 'Tauá',
 }
 
 export function baseDoLid(lid: string): string | null {

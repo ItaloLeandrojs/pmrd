@@ -76,6 +76,19 @@ def test_arquivo_corrompido(tmp_path):
                             "(arquivo incompleto ou corrompido).")
 
 
+def test_projeto_so_de_tracos_e_sem_projeto(tmp_path):
+    from pmrd_importador.agrupar import montar_envio
+    dados = [linha(-9000001, "---"), linha(-9000002, " - "), linha(-9000003, "EXEMPLO-A"),
+             linha(-9000004, "-9")]
+    d = ler_demanda(criar_demanda(tmp_path, linhas=dados))
+    assert [x.projeto for x in d.defeitos] == [None, None, "EXEMPLO-A", "-9"]
+    envio = montar_envio(d, {}, None, "LESTE")
+    nomes = [p["projeto"] for p in envio["projetos"]]
+    assert nomes == ["SEM-PROJETO-LESTE", "EXEMPLO-A", "-9"]
+    assert [x["id_gom"] for x in envio["projetos"][0]["defeitos"]] == ["-9000001", "-9000002"]
+    assert "---" not in envio["presentes"]
+
+
 def test_id_repetido_fica_a_ativa(tmp_path):
     dados = [linha(-9000001, "EXEMPLO-A", "EXECUTADA"), linha(-9000002),
              linha(-9000001, "EXEMPLO-B", "PENDENTE")]
