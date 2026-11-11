@@ -17,6 +17,8 @@ export function mensagemDeErro(e: unknown): string {
   const msg = typeof obj.message === 'string' ? obj.message : ''
   // Conta desativada pelo administrador: o Supabase recusa o login como "banned".
   if (obj.code === 'user_banned' || /user is banned/i.test(msg)) return CONTA_DESATIVADA
+  // raise exception das funções do banco: a frase já é escrita em português para a tela.
+  if (obj.code === 'P0001' && msg.trim() !== '') return msg
   if (obj.name === 'AuthRetryableFetchError' || /failed to fetch|networkerror|load failed/i.test(msg)) return SEM_CONEXAO
   if (/invalid login credentials/i.test(msg)) return 'E-mail ou senha não conferem.'
   if (/new password should be different/i.test(msg)) return 'A nova senha precisa ser diferente da atual.'

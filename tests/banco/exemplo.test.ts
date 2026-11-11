@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ETAPAS } from '../../src/dominio/etapas'
-import { novoBanco } from './apoio'
+import { como, criarPessoa, novoBanco } from './apoio'
 
 const SQL = readFileSync(fileURLToPath(new URL('../../supabase/exemplo.sql', import.meta.url)), 'utf8')
 
@@ -12,7 +12,7 @@ const SQL = readFileSync(fileURLToPath(new URL('../../supabase/exemplo.sql', imp
 const LINHAS = SQL.split(/\r?\n/)
 const LIMPEZA = LINHAS.slice(LINHAS.findIndex((l) => l.includes('PARA LIMPAR')) + 1)
   .filter((l) => l.startsWith('--   '))
-  .slice(0, 5)
+  .slice(0, 7)
   .map((l) => l.replace(/^--\s+/, ''))
   .join('\n')
 
@@ -82,6 +82,16 @@ describe('arquivo exemplo.sql', () => {
     expect(await n(`public.defeitos where id_gom not like 'EXEMPLO-D%'`)).toBe(0)
   })
 
+  it('cria 1 importação do CS e 4 novidades abertas EXEMPLO, uma de cada tipo', async () => {
+    const imp = await db.query<{ regional: string; tipo: string; arquivo: string }>(`select regional, tipo, arquivo from public.importacoes`)
+    expect(imp.rows).toEqual([{ regional: 'CS', tipo: 'demanda', arquivo: 'EXEMPLO-00_DEMANDA.xlsx' }])
+    const { rows } = await db.query<{ tipo: string; projeto: string; situacao: string; regional: string }>(
+      `select tipo, projeto, situacao, regional from public.novidades order by tipo`,
+    )
+    expect(rows.map((r) => r.tipo)).toEqual(['corrigido', 'mudou', 'novo', 'saiu'])
+    expect(rows.every((r) => r.projeto.startsWith('EXEMPLO-') && r.situacao === 'aberta' && r.regional === 'CS')).toBe(true)
+  })
+
   it('não mexe em perfis nem em contas', async () => {
     expect(await n('public.perfis')).toBe(0)
     expect(await n('auth.users')).toBe(0)
@@ -91,15 +101,41 @@ describe('arquivo exemplo.sql', () => {
     await db.exec(SQL)
     expect(await n('public.equipes')).toBe(9)
     expect(await n('public.projetos')).toBe(60)
+    expect(await n('public.importacoes')).toBe(1)
+    expect(await n('public.novidades')).toBe(4)
   })
 
   it('o delete de limpeza (defeitos antes de projetos) tira tudo e deixa o resto', async () => {
-    expect(LIMPEZA).toMatch(/delete from public\.defeitos[\s\S]*delete from public\.projetos/)
+    expect(LIMPEZA).toMatch(/delete from public\.novidades[\s\S]*delete from public\.importacoes[\s\S]*delete from public\.defeitos[\s\S]*delete from public\.projetos/)
     await db.exec(LIMPEZA)
     expect(await n('public.defeitos')).toBe(0)
     expect(await n('public.projetos')).toBe(0)
     expect(await n('public.equipes')).toBe(0)
     expect(await n('public.historico')).toBe(0)
+    expect(await n('public.novidades')).toBe(0)
+    expect(await n('public.importacoes')).toBe(0)
     expect(await n('public.motivos')).toBe(8)
+  })
+})
+
+describe('novidades do exemplo.sql com as funções do banco', () => {
+  let banco: PGlite
+  beforeAll(async () => {
+    banco = await novoBanco()
+    await banco.exec(SQL)
+  }, 60_000)
+  afterAll(async () => { await banco.close() })
+
+  it('o administrador aceita as 4 (cada uma com a escolha do seu tipo) sem erro', async () => {
+    const admin = await criarPessoa(banco, { papel: 'admin' })
+    const nov = (await banco.query<{ id: number; tipo: string }>(`select id, tipo from public.novidades`)).rows
+    const escolha: Record<string, string | null> = { novo: null, mudou: null, saiu: 'MANTER', corrigido: 'EXECUTADO' }
+    for (const x of nov) await como(banco, { id: admin }, 'select public.aceitar_novidade($1, $2)', [x.id, escolha[x.tipo]])
+    const abertas = await banco.query<{ n: number }>(`select count(*)::int as n from public.novidades where situacao = 'aberta'`)
+    expect(abertas.rows[0].n).toBe(0)
+    const novo = await banco.query<{ prioridade: number }>(`select prioridade from public.projetos where projeto = 'EXEMPLO-0061'`)
+    expect(novo.rows).toEqual([{ prioridade: 7 }])
+    const saiu = await banco.query<{ saiu_da_demanda: boolean }>(`select saiu_da_demanda from public.projetos where projeto = 'EXEMPLO-0006'`)
+    expect(saiu.rows).toEqual([{ saiu_da_demanda: true }])
   })
 })

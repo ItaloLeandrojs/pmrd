@@ -1,10 +1,11 @@
 -- PMRD: DADOS DE EXEMPLO (tudo aqui é EXEMPLO, nada é dado real).
--- Rode depois do 001_base.sql (SQL Editor -> colar tudo -> Run). Pode rodar de novo
--- sem erro: o que já existe fica como está (on conflict do nothing).
+-- Rode depois do 001_base.sql e do 002_novidades.sql (SQL Editor -> colar tudo -> Run).
+-- Pode rodar de novo sem erro: o que já existe fica como está (on conflict do nothing).
 --
 -- O que entra: 9 equipes EXEMPLO-ML-01..03, EXEMPLO-LVR-01..03 e EXEMPLO-MP-01..03
 -- (uma de cada tipo por regional), 60 projetos EXEMPLO-0001..0060 e de 1 a 8 defeitos
--- EXEMPLO-D0001-1 etc. por projeto. Os municípios são cidades reais do Ceará, que não
+-- EXEMPLO-D0001-1 etc. por projeto, 1 importação EXEMPLO do CS e 4 novidades abertas
+-- (uma de cada tipo: novo, mudou, saiu e corrigido). Os municípios são cidades reais do Ceará, que não
 -- são dado da empresa. Não entra nada em perfis nem em auth: as contas vêm pela função usuarios.
 --
 -- Datas: relativas a current_date, para vistorias vencidas e vencendo e prazos atrasados
@@ -17,6 +18,8 @@
 -- PARA LIMPAR (tire o -- do começo das linhas e rode; a ordem importa: defeitos antes
 -- de projetos, porque defeitos aponta para projetos, e o histórico por último, porque
 -- apagar também grava no histórico):
+--   delete from public.novidades where projeto like 'EXEMPLO-%';
+--   delete from public.importacoes where arquivo like 'EXEMPLO-%';
 --   delete from public.defeitos where projeto like 'EXEMPLO-%';
 --   delete from public.projetos where projeto like 'EXEMPLO-%';
 --   delete from public.equipes where lid like 'EXEMPLO-%';
@@ -118,3 +121,33 @@ from public.projetos p
 cross join lateral generate_series(1, p.qtd_defeitos_informada) as k (n)
 where p.projeto like 'EXEMPLO-%'
 on conflict (id_gom) do nothing;
+
+-- ---------------------------------------------------------------
+-- 4. Novidades da Enel de exemplo: 1 importação do CS e 4 novidades
+--    abertas, uma de cada tipo, no formato que o enviar_demanda grava.
+--    mudou, saiu e corrigido apontam para projetos do CS acima
+--    (EXEMPLO-0003, EXEMPLO-0006 e EXEMPLO-0014); o novo é EXEMPLO-0061.
+-- ---------------------------------------------------------------
+insert into public.importacoes (tipo, regional, arquivo, quando, resumo)
+select 'demanda', 'CS', 'EXEMPLO-00_DEMANDA.xlsx', now() - interval '2 hours',
+       '{"novo": 1, "mudou": 1, "saiu": 1, "corrigido": 1, "sem_mudanca": 12,
+         "avisos": ["EXEMPLO: prioridade fora do mapa no defeito EXEMPLO-D9001, que ficou sem prioridade."]}'::jsonb
+ where not exists (select 1 from public.importacoes where arquivo = 'EXEMPLO-00_DEMANDA.xlsx');
+
+insert into public.novidades (importacao_id, regional, projeto, tipo, dados, assinatura)
+select i.id, 'CS', n.projeto, n.tipo, n.dados::jsonb, md5('EXEMPLO' || n.tipo || n.projeto)
+  from (select id from public.importacoes where arquivo = 'EXEMPLO-00_DEMANDA.xlsx' order by id limit 1) as i
+ cross join (values
+   ('EXEMPLO-0061', 'novo',
+    '{"projeto": "EXEMPLO-0061", "municipio": "Fortaleza", "alimentadores": ["EXEMPLO-AL-01"], "defeitos": [
+       {"id_gom": "EXEMPLO-D0061-1", "prioridade": 7, "estrutura": "EXEMPLO-EST-1", "alimentador": "EXEMPLO-AL-01", "estado_enel": "PENDENTE", "lat": -3.7312, "lng": -38.5214},
+       {"id_gom": "EXEMPLO-D0061-2", "prioridade": 7, "estrutura": "EXEMPLO-EST-2", "alimentador": "EXEMPLO-AL-01", "estado_enel": "PENDENTE", "lat": -3.7316, "lng": -38.5218},
+       {"id_gom": "EXEMPLO-D0061-3", "prioridade": 9, "estrutura": "EXEMPLO-EST-3", "alimentador": "EXEMPLO-AL-01", "estado_enel": "EXECUÇÃO", "lat": null, "lng": null}]}'),
+   ('EXEMPLO-0003', 'mudou',
+    '{"entram": [{"id_gom": "EXEMPLO-D0003-9", "prioridade": 3, "estrutura": "EXEMPLO-EST-4", "alimentador": "EXEMPLO-AL-04", "estado_enel": "PENDENTE", "lat": null, "lng": null}],
+      "saem": ["EXEMPLO-D0003-3", "EXEMPLO-D0003-4"], "prioridade_antes": 4, "prioridade_nova": 3, "alimentadores": ["EXEMPLO-AL-04"]}'),
+   ('EXEMPLO-0006', 'saiu', '{"etapa": "AGUARDANDO SGD"}'),
+   ('EXEMPLO-0014', 'corrigido',
+    '{"defeitos": [{"id_gom": "EXEMPLO-D0014-1", "estado_enel": "CORRIGIDO"}, {"id_gom": "EXEMPLO-D0014-2", "estado_enel": "CORRIGIDO"}]}')
+ ) as n (projeto, tipo, dados)
+ where not exists (select 1 from public.novidades x where x.importacao_id = i.id and x.projeto = n.projeto and x.tipo = n.tipo);

@@ -17,6 +17,10 @@ describe('mensagemDeErro', () => {
   it('avisa quando o banco não gravou nenhuma linha', () => {
     expect(mensagemDeErro(new NadaGravado())).toMatch(/^Não foi gravado\./)
   })
+  it('mostra como veio a frase das funções do banco (raise exception, código P0001)', () => {
+    expect(mensagemDeErro({ code: 'P0001', message: 'Esta novidade já foi decidida.' })).toBe('Esta novidade já foi decidida.')
+    expect(mensagemDeErro({ code: 'P0001', message: '' })).toBe('Algo deu errado. Tente de novo.')
+  })
   it('usa frase genérica para o desconhecido', () => {
     expect(mensagemDeErro(new Error('xyz'))).toBe('Algo deu errado. Tente de novo.')
     expect(mensagemDeErro(null)).toBe('Algo deu errado. Tente de novo.')

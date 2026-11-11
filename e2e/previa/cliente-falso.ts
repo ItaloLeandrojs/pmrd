@@ -112,8 +112,91 @@ const perfis = [
   ...PESSOAS.slice(1).map((p, i) => ({ ...p, email: `pessoa${i + 2}@exemplo.test`, papel: 'equipe', senha_provisoria: false, regional_preferida: 'TODAS', tema: 'sistema' })),
 ]
 
+// Novidades da Enel (plano 2): uma leitura por regional (CS lida há pouco, Sul com erro, Leste há mais de
+// 26 horas) e a fila aberta do CS, com um exemplo de cada tipo. Horas relativas ao relógio do navegador.
+const horasAtras = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString()
+const importacoes = [
+  {
+    id: 1, tipo: 'demanda', regional: 'CS', arquivo: '00_EXEMPLO.xlsx', quando: horasAtras(2), erro: null,
+    resumo: {
+      novo: 2, mudou: 1, saiu: 1, corrigido: 1, sem_mudanca: 14,
+      avisos: [
+        'Prioridade "EXEMPLO" fora do mapa no defeito EXEMPLO-D9001: ficou sem prioridade.',
+        'ID EXEMPLO-D9002 repetido na planilha: valeu a primeira linha ativa.',
+      ],
+    },
+  },
+  {
+    id: 2, tipo: 'erro', regional: 'SUL', arquivo: '02_EXEMPLO.xlsx', quando: horasAtras(5), resumo: {},
+    erro: 'A aba DEMANDA MENSAL não tem a coluna PROJETO SGM nem PROJETO WIN. Nada foi enviado.',
+  },
+  { id: 3, tipo: 'demanda', regional: 'LESTE', arquivo: '01_EXEMPLO.xlsx', quando: horasAtras(30), erro: null, resumo: { avisos: [] } },
+]
+const def = (id_gom: string, prioridade: number | null, estrutura: string) => ({
+  id_gom, prioridade, estrutura, alimentador: 'ALIM-301', estado_enel: 'PENDENTE', lat: -3.73, lng: -38.52,
+})
+const novidades = [
+  {
+    id: 101, importacao_id: 1, regional: 'CS', projeto: 'EXEMPLO-0101', tipo: 'novo', situacao: 'aberta', criada_em: horasAtras(2),
+    dados: { projeto: 'EXEMPLO-0101', municipio: 'Fortaleza', alimentadores: ['ALIM-301'], defeitos: [def('EXEMPLO-D0101-1', 7, 'ESTR-101A'), def('EXEMPLO-D0101-2', 7, 'ESTR-101B'), def('EXEMPLO-D0101-3', 9, 'ESTR-101C')] },
+  },
+  {
+    id: 102, importacao_id: 1, regional: 'CS', projeto: 'EXEMPLO-0102', tipo: 'novo', situacao: 'aberta', criada_em: horasAtras(2),
+    dados: { projeto: 'EXEMPLO-0102', municipio: 'Caucaia', alimentadores: ['ALIM-302'], defeitos: [def('EXEMPLO-D0102-1', 3, 'ESTR-102A')] },
+  },
+  {
+    id: 103, importacao_id: 1, regional: 'CS', projeto: 'EXEMPLO-0002', tipo: 'mudou', situacao: 'aberta', criada_em: horasAtras(2),
+    dados: { entram: [def('EXEMPLO-D0002-9', 3, 'ESTR-2A')], saem: ['EXEMPLO-D0002-1', 'EXEMPLO-D0002-2'], prioridade_antes: 2, prioridade_nova: 3, alimentadores: ['ALIM-101'] },
+  },
+  {
+    id: 104, importacao_id: 1, regional: 'CS', projeto: 'EXEMPLO-0004', tipo: 'saiu', situacao: 'aberta', criada_em: horasAtras(2),
+    dados: { etapa: 'ANÁLISE PÓS-VISTORIA' },
+  },
+  {
+    id: 105, importacao_id: 1, regional: 'CS', projeto: 'EXEMPLO-0001', tipo: 'corrigido', situacao: 'aberta', criada_em: horasAtras(2),
+    dados: { defeitos: [{ id_gom: 'EXEMPLO-D0001', estado_enel: 'CORRIGIDO' }, { id_gom: 'EXEMPLO-D0002', estado_enel: 'CORRIGIDO' }] },
+  },
+]
+
 const tabelas: Record<string, any[]> = {
-  projetos, defeitos, historico, parametros, equipes, motivos, solicitantes_sgd: solicitantes, perfis,
+  projetos, defeitos, historico, parametros, equipes, motivos, solicitantes_sgd: solicitantes, perfis, importacoes, novidades,
+}
+
+// RPCs das novidades: decide a linha em memória (sem refazer a carteira; a prévia só mostra a tela).
+function rpcNovidades(nome: string, a: any): { data: any; error: any } {
+  const decidir = (id: number, situacao: string, escolha: string | null) => {
+    const n = novidades.find((x) => x.id === id)
+    if (!n) return { code: 'P0001', message: 'Novidade não encontrada.' }
+    if (n.situacao !== 'aberta') return { code: 'P0001', message: 'Esta novidade já foi decidida.' }
+    n.situacao = situacao
+    if (situacao === 'aceita' && n.tipo === 'saiu') {
+      const p = projetos.find((x) => x.projeto === n.projeto)
+      if (p) {
+        p.saiu_da_demanda = true
+        if (escolha && escolha !== 'MANTER') p.etapa = escolha
+      }
+    }
+    return null
+  }
+  if (nome === 'aceitar_novidade') return { data: null, error: decidir(a.p_id, 'aceita', a.p_escolha ?? null) }
+  if (nome === 'recusar_novidade') return { data: null, error: decidir(a.p_id, 'recusada', null) }
+  if (nome === 'aceitar_novidades') {
+    for (const id of a.p_ids as number[]) {
+      const e = decidir(id, 'aceita', null)
+      if (e) return { data: null, error: e }
+    }
+    return { data: (a.p_ids as number[]).length, error: null }
+  }
+  return { data: null, error: null }
+}
+
+/** O rpc do supabase-js devolve um construtor (aceita .abortSignal) que vira promessa no await. */
+function chamada(r: () => { data: any; error: any }) {
+  const b: any = {
+    abortSignal: (_s: unknown) => b,
+    then: (ok?: (v: any) => any, ko?: (e: any) => any) => Promise.resolve().then(r).then(ok, ko),
+  }
+  return b
 }
 
 // ---------------------------------------------------------------------------
@@ -190,7 +273,7 @@ const sessao = () => ({ access_token: 'falso', user: { id: USUARIO.id, email: US
 
 export const nuvem: any = {
   from: (t: string) => new Construtor(t),
-  rpc: async (_n: string, _a?: unknown) => ({ data: null, error: null }),
+  rpc: (n: string, a?: unknown) => chamada(() => rpcNovidades(n, a)),
   auth: {
     getSession: async () => ({ data: { session: dentro ? sessao() : null }, error: null }),
     getUser: async () => ({ data: { user: dentro ? sessao().user : null }, error: null }),

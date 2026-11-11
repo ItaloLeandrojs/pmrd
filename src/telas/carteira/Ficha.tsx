@@ -1,6 +1,6 @@
 // Ficha do projeto: painel ao lado da tabela da Carteira. Leitura, menos o pedido do gestor (edita aqui).
 import { useEffect, useState, type ReactNode } from 'react'
-import { MapPin, Star, WarningCircle, X } from '@phosphor-icons/react'
+import { MapPin, Star, TrayArrowUp, WarningCircle, X } from '@phosphor-icons/react'
 import { formatarBR, hojeEmFortaleza } from '../../dominio/datas'
 import { corParado, diasParado, etapaConcluida } from '../../dominio/etapas'
 import { PRIORIDADES } from '../../dominio/prioridades'
@@ -88,6 +88,12 @@ export function Ficha({ linha, pessoas, parametros, hoje, aoFechar, aoPedidoGest
             </span>
           )}
         </p>
+        {ficha?.projeto.saiu_da_demanda && (
+          <p className="ficha__saiu">
+            <TrayArrowUp size={15} weight="bold" aria-hidden="true" />
+            Saiu da demanda da Enel
+          </p>
+        )}
         <div className="ficha__acoes">
           <button type="button" className="cfg__botao cfg__botao--p" disabled title="Chega no plano 4">
             <MapPin size={15} aria-hidden="true" />

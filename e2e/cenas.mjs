@@ -65,6 +65,27 @@ export const CENAS = [
     },
   })),
   {
+    // Todas as regionais: a faixa mostra as 3 leituras (lida, erro e mais de 26 horas) e os avisos abertos.
+    id: "novidades",
+    origem: "previa",
+    abrir: async (page, url) => {
+      await abrirPrevia(page, url, "#/novidades");
+      await escolherTodas(page);
+      await page.getByRole("tablist", { name: "Tipos de novidade" }).waitFor({ timeout: 10000 });
+      await page.getByText(/^\d+ avisos?$/).first().click();
+      await page.waitForTimeout(300);
+    },
+  },
+  {
+    id: "novidades-sairam",
+    origem: "previa",
+    abrir: async (page, url) => {
+      await abrirPrevia(page, url, "#/novidades");
+      await page.getByRole("tablist", { name: "Tipos de novidade" }).waitFor({ timeout: 10000 });
+      await aba(page, /^Saíram/);
+    },
+  },
+  {
     id: "chega-no-plano",
     origem: "previa",
     abrir: async (page, url) => {

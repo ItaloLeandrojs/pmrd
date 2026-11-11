@@ -109,6 +109,18 @@ describe('Ficha', () => {
     expect(within(secao).getByText('Projeto criado')).toBeTruthy()
   })
 
+  it('projeto que saiu da demanda mostra a marca "Saiu da demanda da Enel" escrita', async () => {
+    const f = ficha(); f.projeto = { ...f.projeto, saiu_da_demanda: true }
+    abrir(f)
+    expect(await screen.findByText('Saiu da demanda da Enel')).toBeTruthy()
+  })
+
+  it('projeto na demanda não mostra a marca', async () => {
+    abrir()
+    await screen.findByRole('heading', { name: 'Dados' })
+    expect(screen.queryByText('Saiu da demanda da Enel')).toBeNull()
+  })
+
   it('"ver no mapa" fica desligado com a dica "Chega no plano 4"', async () => {
     abrir()
     const b = (await screen.findByRole('button', { name: /Ver no mapa/ })) as HTMLButtonElement

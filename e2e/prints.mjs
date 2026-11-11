@@ -8,7 +8,8 @@ import { servidor, navegador, semInternet, DIST, DIST_PREVIA, PORTA, PRINTS } fr
 import { CENAS } from "./cenas.mjs";
 
 const SAIDA = process.env.PRINTS_PASTA || PRINTS;
-const QUAIS = ["login", "carteira-todas", "carteira-ficha", "configuracoes-equipes"];
+// PRINTS_CENAS="novidades,carteira-todas" tira só essas cenas.
+const QUAIS = process.env.PRINTS_CENAS ? process.env.PRINTS_CENAS.split(",") : ["login", "carteira-todas", "carteira-ficha", "configuracoes-equipes", "novidades"];
 const TELAS = [
   ["390", { width: 390, height: 844 }, { isMobile: true, hasTouch: true }],
   ["1366", { width: 1366, height: 768 }, {}],

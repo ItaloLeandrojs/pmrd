@@ -469,3 +469,67 @@ button, input { font: inherit; color: inherit; }
 .quadro .cfg__erro { margin: 0; }
 @media (max-width: 560px) { .quadro__corpo--grade { grid-template-columns: 1fr; } }
 @media (prefers-reduced-motion: reduce) { .quadro__fundo, .quadro { animation: none; } }
+
+/* ---------- Ficha: marca de projeto fora da demanda (texto com ícone, nunca só cor) ---------- */
+.ficha__saiu { display: inline-flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: 12.5px; font-weight: 700; color: var(--warn); }
+
+/* ---------- Novidades da Enel (fundo sólido, a densidade da Carteira) ---------- */
+.nov { display: flex; flex-direction: column; gap: 12px; max-width: 1180px; }
+.nov__faixa { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; }
+.nov__imp { min-width: 0; padding: 10px 12px; border-radius: var(--raio-m); background: var(--sf); border: 1px solid var(--line); font-size: 13.5px; }
+.nov__imp-linha { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; }
+.nov__imp-linha svg { flex: none; }
+.nov__imp--ok svg { color: var(--ok); }
+.nov__imp--velha { color: var(--warn); }
+.nov__imp--erro { background: var(--bad-bg); border-color: transparent; color: var(--bad); }
+.nov__imp--nenhuma { color: var(--mut); }
+.nov__imp-erro { margin: 4px 0 0 24px; font-weight: 500; overflow-wrap: anywhere; }
+.nov__avisos { margin: 2px 0 0 24px; }
+.nov__avisos summary, .nov__detalhes summary {
+  display: inline-block; padding: 4px 0; color: var(--acc); font-size: 12.5px; font-weight: 700; cursor: pointer;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.nov__avisos ul { margin: 2px 0 0; padding-left: 18px; color: var(--ink); font-size: 13px; }
+.nov__nota { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--mut); font-size: 13.5px; font-weight: 600; }
+.nov__nota svg { flex: none; }
+
+.nov__abas { margin: 4px 0 0; }
+.nov__aba-n { margin-left: 2px; font-variant-numeric: tabular-nums; font-weight: 500; }
+.nov__painel { background: var(--sf); border: 1px solid var(--line); border-radius: var(--raio-g); padding: 2px 18px; }
+.nov__painel > .cfg__vazio { padding: 22px 8px; }
+.nov__vazio { background: var(--sf); border: 1px solid var(--line); border-radius: var(--raio-g); }
+.nov__lote { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+
+.nov__lista { list-style: none; margin: 0; padding: 0; }
+.nov__item + .nov__item { border-top: 1px solid var(--line); }
+.nov__cartao { display: grid; grid-template-columns: 1fr auto; align-items: start; gap: 8px 18px; padding: 14px 0; }
+.nov__cartao:has(.nov__marca) { grid-template-columns: auto 1fr auto; }
+.nov__marca { width: 20px; height: 20px; margin: 2px 0 0; accent-color: var(--acc); cursor: pointer; }
+.nov__info { min-width: 0; }
+.nov__topo { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0; }
+.nov__projeto { font-family: var(--fonte-mono); font-size: 15px; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.nov__regional { padding: 1px 8px; border-radius: 999px; background: var(--sf2); border: 1px solid var(--line2); color: var(--mut); font-size: 11.5px; font-weight: 700; }
+.nov__resumo { margin: 4px 0 0; font-size: 14px; font-weight: 600; }
+.nov__meta { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 3px 0 0; color: var(--mut); font-size: 13px; font-variant-numeric: tabular-nums; }
+.nov__mono { font-family: var(--fonte-mono); font-size: 12px; }
+.nov__fora { color: var(--warn); font-weight: 600; }
+.nov__detalhes { margin-top: 2px; }
+.nov__sub { margin: 6px 0 0; font-size: 12px; font-weight: 700; }
+.nov__defeitos { list-style: none; margin: 2px 0 0; padding: 0; }
+.nov__defeitos li { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 4px 0; border-top: 1px solid var(--line); color: var(--mut); font-size: 12.5px; }
+.nov__defeitos li:first-child { border-top: 0; }
+.nov__gom { color: var(--ink); font-weight: 600; }
+.nov__acoes { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 440px; }
+/* Gravação em andamento: as outras decisões esperam (aria-disabled mantém o foco no botão). */
+.nov .cfg__botao[aria-disabled='true'] { opacity: 0.6; cursor: not-allowed; }
+.nov .cfg__botao[aria-disabled='true']:active { transform: none; }
+@media (hover: hover) and (pointer: fine) {
+  .nov__avisos summary:hover, .nov__detalhes summary:hover { color: var(--ink); }
+  .nov .cfg__botao--forte[aria-disabled='true']:hover { background: var(--acc); }
+}
+@media (max-width: 760px) {
+  .nov__cartao:has(.nov__marca) { grid-template-columns: auto 1fr; }
+  .nov__cartao:not(:has(.nov__marca)) { grid-template-columns: 1fr; }
+  .nov__acoes { grid-column: 1 / -1; justify-content: flex-start; max-width: none; }
+  .nov__painel { padding: 2px 14px; }
+}
