@@ -774,3 +774,282 @@ revoke all on function public.recusar_novidade(bigint) from public, anon;
 grant execute on function public.aceitar_novidade(bigint, text) to authenticated;
 grant execute on function public.aceitar_novidades(bigint[]) to authenticated;
 grant execute on function public.recusar_novidade(bigint) to authenticated;
+
+-- ---------------------------------------------------------------
+-- 9. carga_inicial: carteira de partida (xlsm de controle + demanda)
+-- ---------------------------------------------------------------
+-- Texto para comparar nomes: sem acento e em minúsculas (interna).
+create or replace function public.texto_comparavel(p_texto text)
+returns text
+language sql
+immutable
+set search_path = ''
+as $$
+  select lower(translate(btrim(coalesce(p_texto, '')),
+    'ÁÀÂÃÄÉÈÊËÍÌÎÏÓÒÔÕÖÚÙÛÜÇáàâãäéèêëíìîïóòôõöúùûüç',
+    'AAAAAEEEEIIIIOOOOOUUUUCaaaaaeeeeiiiiooooouuuuc'));
+$$;
+
+-- Perfis do PCM (ativos, admin ou equipe) cujo nome começa com o texto,
+-- comparando sem acento e caixa (interna; só a carga_inicial chama).
+create or replace function public.perfis_pelo_nome(p_texto text)
+returns uuid[]
+language sql
+stable
+set search_path = ''
+as $$
+  select coalesce(array_agg(p.id order by p.id), '{}')
+    from public.perfis p
+   where p.ativo
+     and p.papel in ('admin', 'equipe')
+     and btrim(p.nome) <> ''
+     and public.texto_comparavel(p_texto) <> ''
+     and starts_with(public.texto_comparavel(p.nome), public.texto_comparavel(p_texto));
+$$;
+
+-- Só administrador ativo, e só uma vez (recusa se já existe importação do
+-- tipo carga). O importador (pmrd-carga) manda:
+--   projetos:     os do xlsm, já com regional, origem (enel se está entre os
+--                 presentes da demanda da regional, senão manual), etapa,
+--                 prioridade, campos da vistoria, responsavel (texto) e
+--                 defeitos [{id_gom, prioridade, estrutura, alimentador,
+--                 estado_enel, lat, lng}];
+--   da_demanda:   projetos ativos da demanda que não estão no xlsm
+--                 [{regional, projeto, municipio, alimentadores, defeitos}],
+--                 criados por criar_projeto_da_demanda (EM ANÁLISE);
+--   equipes:      [{lid, chefe, tipo, regional, base, grupo_report}];
+--   solicitantes: nomes;
+--   avisos:       textos do importador; arquivo: nome do xlsm.
+-- Numa transação: (se p_apagar_exemplos) apaga projetos EXEMPLO-%, os defeitos
+-- e as novidades deles; insere equipes (a que já existe fica), solicitantes
+-- que ainda não existem pelo nome, projetos e defeitos. Projeto que já existe
+-- e defeito que já está em outro projeto viram aviso, não erro. O responsável
+-- liga ao único perfil cujo nome começa com o texto; sem par único, fica vazio
+-- com aviso. Grava importacoes tipo carga com as contagens e os avisos e
+-- devolve esse resumo.
+create or replace function public.carga_inicial(p_carga jsonb, p_apagar_exemplos boolean)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_quando    timestamptz;
+  v_avisos    jsonb;
+  v_p         jsonb;
+  v_d         jsonb;
+  v_projeto   text;
+  v_outro     text;
+  v_ids       uuid[];
+  v_n         int;
+  v_apagados  int := 0;
+  v_equipes   int := 0;
+  v_solic     int := 0;
+  v_enel      int := 0;
+  v_manuais   int := 0;
+  v_demanda   int := 0;
+  v_def       int := 0;
+  v_resumo    jsonb;
+begin
+  if not public.eh_admin() then
+    raise exception 'Só administrador faz a carga inicial.';
+  end if;
+
+  -- Uma carga de cada vez; a segunda espera a primeira e depois recusa.
+  perform pg_advisory_xact_lock(hashtext('pmrd.carga_inicial'));
+
+  select quando into v_quando from public.importacoes where tipo = 'carga' order by quando limit 1;
+  if found then
+    raise exception 'A carga inicial já foi feita em %.',
+      to_char(v_quando at time zone 'America/Fortaleza', 'DD/MM/YYYY');
+  end if;
+
+  -- ---- Conferência da carga (nada é gravado se algo estiver fora) ----
+  if p_carga is null
+     or jsonb_typeof(p_carga -> 'projetos') is distinct from 'array'
+     or jsonb_typeof(p_carga -> 'da_demanda') is distinct from 'array'
+     or jsonb_typeof(p_carga -> 'equipes') is distinct from 'array'
+     or jsonb_typeof(p_carga -> 'solicitantes') is distinct from 'array'
+     or coalesce(jsonb_typeof(p_carga -> 'avisos'), 'array') <> 'array' then
+    raise exception 'Carga sem as listas de projetos, projetos da demanda, equipes e solicitantes.';
+  end if;
+
+  if exists (select 1
+               from (select e.value from jsonb_array_elements(p_carga -> 'projetos') e
+                     union all
+                     select e.value from jsonb_array_elements(p_carga -> 'da_demanda') e) t
+              where jsonb_typeof(t.value) <> 'object'
+                 or coalesce(btrim(t.value ->> 'projeto'), '') = ''
+                 or coalesce(jsonb_typeof(t.value -> 'defeitos'), 'array') <> 'array') then
+    raise exception 'Projeto sem nome ou sem lista de defeitos na carga.';
+  end if;
+
+  select format('Defeito sem ID no projeto %s.', t.value ->> 'projeto') into v_outro
+    from (select e.value from jsonb_array_elements(p_carga -> 'projetos') e
+          union all
+          select e.value from jsonb_array_elements(p_carga -> 'da_demanda') e) t,
+         jsonb_array_elements(coalesce(t.value -> 'defeitos', '[]'::jsonb)) d
+   where jsonb_typeof(d.value) <> 'object'
+      or coalesce(btrim(d.value ->> 'id_gom'), '') = ''
+   limit 1;
+  if found then
+    raise exception '%', v_outro;
+  end if;
+
+  v_avisos := coalesce(p_carga -> 'avisos', '[]'::jsonb);
+
+  -- ---- Exemplos ----
+  if coalesce(p_apagar_exemplos, false) then
+    delete from public.novidades where projeto like 'EXEMPLO-%';
+    delete from public.defeitos where projeto like 'EXEMPLO-%';
+    delete from public.projetos where projeto like 'EXEMPLO-%';
+    get diagnostics v_apagados = row_count;
+  end if;
+
+  -- ---- Equipes e solicitantes ----
+  select v_avisos || coalesce(jsonb_agg(to_jsonb(format(
+           'A equipe %s já estava cadastrada e ficou como está.', q.lid)) order by q.lid collate "C"), '[]'::jsonb)
+    into v_avisos
+    from public.equipes q
+   where q.lid in (select btrim(e.value ->> 'lid') from jsonb_array_elements(p_carga -> 'equipes') e);
+
+  insert into public.equipes (lid, chefe, tipo, regional, grupo_report, base)
+  select btrim(e.value ->> 'lid'), coalesce(btrim(e.value ->> 'chefe'), ''), e.value ->> 'tipo',
+         e.value ->> 'regional', nullif(btrim(e.value ->> 'grupo_report'), ''), nullif(btrim(e.value ->> 'base'), '')
+    from jsonb_array_elements(p_carga -> 'equipes') e
+  on conflict (lid) do nothing;
+  get diagnostics v_equipes = row_count;
+
+  insert into public.solicitantes_sgd (nome)
+  select distinct on (public.texto_comparavel(s.nome)) s.nome
+    from (select btrim(x) as nome from jsonb_array_elements_text(p_carga -> 'solicitantes') x) s
+   where s.nome <> ''
+     and not exists (select 1 from public.solicitantes_sgd o
+                      where public.texto_comparavel(o.nome) = public.texto_comparavel(s.nome));
+  get diagnostics v_solic = row_count;
+
+  -- ---- Projetos do xlsm ----
+  for v_p in select e.value from jsonb_array_elements(p_carga -> 'projetos') e loop
+    v_projeto := btrim(v_p ->> 'projeto');
+    if exists (select 1 from public.projetos where projeto = v_projeto) then
+      v_avisos := v_avisos || to_jsonb(format('O projeto %s já está na carteira e ficou de fora da carga.', v_projeto));
+      continue;
+    end if;
+
+    v_ids := public.perfis_pelo_nome(v_p ->> 'responsavel');
+
+    insert into public.projetos (
+      projeto, regional, origem, ot_correcao, municipio, endereco, prioridade, alimentadores,
+      elemento_corte, qtd_clientes, estruturas, intervencao_prevista, etapa, proxima_acao,
+      prazo_proxima_acao, vistoria_data, vistoria_situacao, vistoria_recurso, vistoria_intervencao,
+      vistoria_observacao, vistoria_enviada_em, responsavel, qtd_defeitos_informada, lat, lng)
+    select v_projeto, v_p ->> 'regional', v_p ->> 'origem',
+           nullif(btrim(v_p ->> 'ot_correcao'), ''), nullif(btrim(v_p ->> 'municipio'), ''),
+           nullif(btrim(v_p ->> 'endereco'), ''), (v_p ->> 'prioridade')::int,
+           array(select jsonb_array_elements_text(coalesce(v_p -> 'alimentadores', '[]'::jsonb))),
+           nullif(btrim(v_p ->> 'elemento_corte'), ''), (v_p ->> 'qtd_clientes')::int,
+           array(select jsonb_array_elements_text(coalesce(v_p -> 'estruturas', '[]'::jsonb))),
+           nullif(btrim(v_p ->> 'intervencao_prevista'), ''), v_p ->> 'etapa',
+           nullif(btrim(v_p ->> 'proxima_acao'), ''), (v_p ->> 'prazo_proxima_acao')::date,
+           (v_p ->> 'vistoria_data')::date, nullif(btrim(v_p ->> 'vistoria_situacao'), ''),
+           nullif(btrim(v_p ->> 'vistoria_recurso'), ''), nullif(btrim(v_p ->> 'vistoria_intervencao'), ''),
+           nullif(btrim(v_p ->> 'vistoria_observacao'), ''), (v_p ->> 'vistoria_enviada_em')::date,
+           case when cardinality(v_ids) = 1 then v_ids[1] end,
+           (v_p ->> 'qtd_defeitos_informada')::int,
+           c.lat, c.lng
+      from (select avg((d.value ->> 'lat')::double precision) as lat,
+                   avg((d.value ->> 'lng')::double precision) as lng
+              from jsonb_array_elements(coalesce(v_p -> 'defeitos', '[]'::jsonb)) d
+             where jsonb_typeof(d.value -> 'lat') = 'number'
+               and jsonb_typeof(d.value -> 'lng') = 'number') c;
+
+    if v_p ->> 'origem' = 'enel' then
+      v_enel := v_enel + 1;
+    else
+      v_manuais := v_manuais + 1;
+    end if;
+
+    for v_d in select d.value from jsonb_array_elements(coalesce(v_p -> 'defeitos', '[]'::jsonb)) d
+                order by d.value ->> 'id_gom' collate "C"
+    loop
+      select projeto into v_outro from public.defeitos where id_gom = btrim(v_d ->> 'id_gom');
+      if found then
+        v_avisos := v_avisos || to_jsonb(format('O defeito %s já está no projeto %s e ficou de fora do projeto %s.',
+                                                btrim(v_d ->> 'id_gom'), v_outro, v_projeto));
+        continue;
+      end if;
+      insert into public.defeitos (id_gom, projeto, prioridade, estrutura, alimentador, estado_enel, situacao, lat, lng)
+      values (btrim(v_d ->> 'id_gom'), v_projeto,
+              case when jsonb_typeof(v_d -> 'prioridade') = 'number' then (v_d ->> 'prioridade')::int end,
+              v_d ->> 'estrutura', v_d ->> 'alimentador', v_d ->> 'estado_enel', 'pendente',
+              case when jsonb_typeof(v_d -> 'lat') = 'number' then (v_d ->> 'lat')::double precision end,
+              case when jsonb_typeof(v_d -> 'lng') = 'number' then (v_d ->> 'lng')::double precision end);
+      v_def := v_def + 1;
+    end loop;
+  end loop;
+
+  -- ---- Projetos ativos da demanda que não estão no xlsm ----
+  for v_p in select e.value from jsonb_array_elements(p_carga -> 'da_demanda') e loop
+    v_projeto := btrim(v_p ->> 'projeto');
+    if exists (select 1 from public.projetos where projeto = v_projeto) then
+      v_avisos := v_avisos || to_jsonb(format('O projeto %s já está na carteira e ficou de fora da carga.', v_projeto));
+      continue;
+    end if;
+
+    -- Defeito que já está em outro projeto: aviso, e sai dos dados.
+    select v_avisos || coalesce(jsonb_agg(to_jsonb(format(
+             'O defeito %s já está no projeto %s e ficou de fora do projeto %s.', x.id_gom, x.projeto, v_projeto))
+             order by x.id_gom collate "C"), '[]'::jsonb)
+      into v_avisos
+      from jsonb_array_elements(coalesce(v_p -> 'defeitos', '[]'::jsonb)) d
+      join public.defeitos x on x.id_gom = d.value ->> 'id_gom';
+
+    v_p := jsonb_set(v_p, '{defeitos}', (
+      select coalesce(jsonb_agg(d.value), '[]'::jsonb)
+        from jsonb_array_elements(coalesce(v_p -> 'defeitos', '[]'::jsonb)) d
+       where not exists (select 1 from public.defeitos x where x.id_gom = d.value ->> 'id_gom')));
+
+    perform public.criar_projeto_da_demanda(v_p ->> 'regional', v_p);
+    v_demanda := v_demanda + 1;
+    v_def := v_def + jsonb_array_length(v_p -> 'defeitos');
+  end loop;
+
+  -- ---- Responsáveis sem par único (um aviso por texto) ----
+  for v_p in
+    select jsonb_build_object('texto', t.texto, 'n', count(*)) as value
+      from (select btrim(e.value ->> 'responsavel') as texto
+              from jsonb_array_elements(p_carga -> 'projetos') e
+             where coalesce(btrim(e.value ->> 'responsavel'), '') <> '') t
+     group by t.texto
+     order by t.texto collate "C"
+  loop
+    v_n := cardinality(public.perfis_pelo_nome(v_p ->> 'texto'));
+    continue when v_n = 1;
+    v_avisos := v_avisos || to_jsonb(format('Responsável "%s" %s: %s %s sem responsável.',
+      v_p ->> 'texto',
+      case when v_n = 0 then 'sem perfil no PMRD' else 'combina com mais de um perfil' end,
+      v_p ->> 'n',
+      case when (v_p ->> 'n')::int = 1 then 'projeto ficou' else 'projetos ficaram' end));
+  end loop;
+
+  v_resumo := jsonb_build_object(
+    'projetos_enel', v_enel,
+    'projetos_manuais', v_manuais,
+    'projetos_da_demanda', v_demanda,
+    'defeitos', v_def,
+    'equipes', v_equipes,
+    'solicitantes', v_solic,
+    'exemplos_apagados', v_apagados,
+    'avisos', v_avisos);
+
+  insert into public.importacoes (tipo, regional, arquivo, resumo)
+  values ('carga', null, coalesce(btrim(p_carga ->> 'arquivo'), ''), v_resumo);
+  return v_resumo;
+end;
+$$;
+
+-- A checagem de quem chama fica dentro da função (eh_admin); as auxiliares são internas.
+revoke all on function public.texto_comparavel(text) from public, anon, authenticated;
+revoke all on function public.perfis_pelo_nome(text) from public, anon, authenticated;
+revoke all on function public.carga_inicial(jsonb, boolean) from public, anon;
+grant execute on function public.carga_inicial(jsonb, boolean) to authenticated;

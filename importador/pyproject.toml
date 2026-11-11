@@ -7,6 +7,7 @@ dependencies = ["openpyxl", "keyring"]
 
 [project.scripts]
 pmrd-importar = "pmrd_importador.principal:main"
+pmrd-carga = "pmrd_importador.carga:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

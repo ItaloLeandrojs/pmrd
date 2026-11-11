@@ -46,3 +46,59 @@ def criar_demanda(pasta: Path, nome="demanda.xlsx", linha_cabecalho=7,
     caminho = pasta / nome
     wb.save(caminho)
     return caminho
+
+
+# Colunas da aba CARTEIRA do xlsm, na ordem da planilha de controle (só os nomes).
+CABECALHO_CARTEIRA = [
+    "PROJETO", "OT CORREÇÃO", "ID GOM", "QTD DEFEITOS", "CARTEIRA", "MUNICÍPIO", "ENDEREÇO",
+    "PRIORIDADE", "ELEMENTO DE CORTE", "QTD CLIENTES", "ESTRUTURA", "INTERVENÇÃO PREVISTA",
+    "ETAPA DA CARTEIRA", "PRÓXIMA AÇÃO", "PRAZO DA PRÓXIMA AÇÃO", "DATA DA VISTORIA",
+    "VALIDADE DA VISTORIA", "SITUAÇÃO DA VISTORIA", "RECURSO", "INTERVENÇÃO DO VISTORIADOR",
+    "OBSERVAÇÃO TÉCNICA", "RESPONSÁVEL ATUAL", "DATA DO ENVIO DA VISTORIA", "DIAS AGUARDANDO VISTORIA",
+]
+
+
+def linha_carteira(**mudar):
+    """Uma linha FICTÍCIA da aba CARTEIRA ({nome da coluna: valor})."""
+    valores = {
+        "PROJETO": "EXEMPLO-0001", "OT CORREÇÃO": None, "ID GOM": -9000001, "QTD DEFEITOS": 1,
+        "CARTEIRA": "SUL", "MUNICÍPIO": "Exemplópolis", "ENDEREÇO": "EXEMPLO, campo 1",
+        "PRIORIDADE": "Obra", "ELEMENTO DE CORTE": "EXEMPLO-CHAVE", "QTD CLIENTES": 10,
+        "ESTRUTURA": "EXEMPLO-EST-1", "INTERVENÇÃO PREVISTA": "DESL MT",
+        "ETAPA DA CARTEIRA": "AGUARDANDO VISTORIA", "PRÓXIMA AÇÃO": "AGUARDAR VISTORIA",
+        "PRAZO DA PRÓXIMA AÇÃO": None, "DATA DA VISTORIA": None, "VALIDADE DA VISTORIA": None,
+        "SITUAÇÃO DA VISTORIA": "SEM VISTORIA", "RECURSO": None, "INTERVENÇÃO DO VISTORIADOR": None,
+        "OBSERVAÇÃO TÉCNICA": None, "RESPONSÁVEL ATUAL": "Pessoa Exemplo",
+        "DATA DO ENVIO DA VISTORIA": None, "DIAS AGUARDANDO VISTORIA": 3,
+    }
+    valores.update(mudar)
+    return valores
+
+
+def criar_xlsm(pasta: Path, nome="controle.xlsm", carteira=None, equipes=None, solicitantes=None):
+    """xlsm FICTÍCIO com as abas CARTEIRA (cabeçalho na linha 1) e LISTA.
+    carteira: lista de `linha_carteira`; equipes: lista de (LID, chefe, tipo)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "RESUMO SEMANA"
+    car = wb.create_sheet("CARTEIRA")
+    for c, v in enumerate(CABECALHO_CARTEIRA, 1):
+        car.cell(row=1, column=c, value=v)
+    for r, d in enumerate(carteira or [], 2):
+        for c, nome_col in enumerate(CABECALHO_CARTEIRA, 1):
+            car.cell(row=r, column=c, value=d.get(nome_col))
+    lista = wb.create_sheet("LISTA")
+    cab = ["ETAPA DA CARTEIRA", "NOMES SOLICITANTES", "LID", "CHEFE DE TURMA", "TIPO DE EQUIPE", "PARÂMETRO"]
+    for c, v in enumerate(cab, 1):
+        lista.cell(row=1, column=c, value=v)
+    lista.cell(row=2, column=1, value="EM ANÁLISE")
+    lista.cell(row=2, column=6, value="VALIDADE DA VISTORIA")
+    for r, s in enumerate(solicitantes or [], 2):
+        lista.cell(row=r, column=2, value=s)
+    for r, (lid, chefe, tipo) in enumerate(equipes or [], 2):
+        lista.cell(row=r, column=3, value=lid)
+        lista.cell(row=r, column=4, value=chefe)
+        lista.cell(row=r, column=5, value=tipo)
+    caminho = pasta / nome
+    wb.save(caminho)
+    return caminho
