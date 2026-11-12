@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 // @ts-expect-error: módulo .mjs sem tipos
-import { ajudaContaDeTeste, etapaDeTroca, lerEnv, negado, nomesQueFaltam, statusDoErro } from '../../scripts/conferir-ajudas.mjs'
+import { ajudaContaDeTeste, etapaDeTroca, lerEnv, negado, nomesQueFaltam, soAdministrador, statusDoErro } from '../../scripts/conferir-ajudas.mjs'
 import { ETAPAS } from '../../src/dominio/etapas'
 
 describe('ajudas do conferir-supabase', () => {
@@ -38,6 +38,18 @@ describe('ajudas do conferir-supabase', () => {
     expect(statusDoErro({ context: { status: 403 } })).toBe(403)
     expect(statusDoErro(null)).toBeNull()
     expect(statusDoErro({ name: 'FunctionsFetchError' })).toBeNull()
+  })
+
+  it('soAdministrador só aceita a recusa da própria função (P0001 com "Só administrador")', () => {
+    expect(soAdministrador({ code: 'P0001', message: 'Só administrador decide as novidades.' })).toBe(true)
+  })
+
+  it('soAdministrador não aceita função inexistente, outra recusa, erro de rede nem sucesso', () => {
+    expect(soAdministrador(null)).toBe(false)
+    expect(soAdministrador({ code: 'PGRST202', message: 'Could not find the function' })).toBe(false)
+    expect(soAdministrador({ code: 'P0001', message: 'Novidade não encontrada.' })).toBe(false)
+    expect(soAdministrador({ code: '42501', message: 'permission denied for function aceitar_novidade' })).toBe(false)
+    expect(soAdministrador({ message: 'TypeError: fetch failed' })).toBe(false)
   })
 
   it('a ajuda diz em português como criar o arquivo e não traz valores', () => {

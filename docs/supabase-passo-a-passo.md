@@ -156,3 +156,137 @@ node scripts/conferir-supabase.mjs
 ```
 
 Cada item mostra OK ou FALHOU. Se a conta de teste trocar a senha no site, ponha a senha nova no arquivo.
+
+A conferência usa o projeto `EXEMPLO-0001`. Depois da carga inicial com `--apagar-exemplos` (seção 12) esse projeto some e o item da troca de etapa passa a sair FALHOU: rode a conferência **antes** da carga.
+
+---
+
+## 8. Rodar as novidades (a entrada de dados)
+
+O arquivo `002_novidades.sql` cria a fila de novidades da Enel, o papel do robô que envia a demanda e a carga inicial.
+
+1. Menu **SQL Editor**, **New query**.
+2. Abra `supabase/migracoes/001_base.sql`, copie tudo, cole e clique em **Run**. Ele mudou junto com o 002, então roda de novo.
+3. **New query** outra vez. Abra `supabase/migracoes/002_novidades.sql`, copie tudo, cole e clique em **Run**.
+4. Nos dois deve aparecer **Success. No rows returned**.
+
+A ordem é sempre essa: primeiro o `001`, depois o `002`. Os dois podem rodar de novo sem duplicar nada.
+
+Depois, rode a conferência da seção 7. Ela confere também que a conta de teste lê as novidades e não consegue aceitar nenhuma.
+
+---
+
+## 9. Criar a conta robô
+
+O robô é a conta que o importador usa para mandar a demanda. Ele só envia: não lê a carteira e não entra no site (o site mostra "Esta conta não usa o site.").
+
+1. Menu **Authentication → Users**, **Add user**, **Create new user**.
+2. Em **Email**, invente um e-mail só para o robô. Em **Password**, use uma senha forte e guarde no seu gerenciador de senhas.
+3. Marque **Auto Confirm User** e clique em **Create user**.
+4. Menu **SQL Editor**, nova consulta. Rode, trocando `<e-mail do robô>`:
+
+```
+update public.perfis set papel = 'importador', senha_provisoria = false where email = '<e-mail do robô>';
+```
+
+5. Deve aparecer **Success. 1 row affected**. Se aparecer 0, o e-mail não bate com o da conta.
+
+---
+
+## 10. Guardar o e-mail e a senha do robô no computador
+
+Isto é feito no computador que vai rodar o importador, na pasta `pcm-manutencao\importador`.
+
+1. Crie o arquivo `dados\robo.txt` com uma linha só: o e-mail do robô. Pode ser pelo Bloco de Notas. A pasta `dados` fica fora do Git.
+2. Guarde a senha no Gerenciador de Credenciais do Windows. Você digita a senha e ela não aparece na tela:
+
+```
+uv run python -c "import keyring, getpass; keyring.set_password('pmrd-importador', '<e-mail do robô>', getpass.getpass())"
+```
+
+A senha não fica em arquivo nenhum do projeto.
+
+---
+
+## 11. Preparar a pasta das planilhas e ensaiar
+
+1. Baixe a malha dos municípios do IBGE (uma vez):
+
+```
+uv run pmrd-importar --baixar-malha
+```
+
+2. Crie a pasta `Desktop\PMRD\demanda` e salve nela as três planilhas da Enel (`00_` CS, `01_` Leste, `02_` Sul), uma por prefixo.
+3. Rode o ensaio. Ele lê as planilhas e mostra as contagens, sem chamar o Supabase e sem gravar nada:
+
+```
+uv run pmrd-importar --ensaio
+```
+
+**Não rode o importador para valer ainda.** A carga inicial (seção 12) vem antes: ela já traz os projetos ativos da demanda. Importando antes, todos chegariam como "novo" na fila.
+
+---
+
+## 12. Fazer a carga inicial (uma vez só)
+
+A carga leva para o PMRD a carteira da planilha de controle, os projetos ativos da demanda e as equipes das listas.
+
+1. Ensaie primeiro. Nada é gravado nem enviado:
+
+```
+uv run pmrd-carga --xlsm "<caminho da planilha de controle>" --pasta "<pasta das planilhas da demanda>" --equipes "<pasta das listas de equipes>" --ensaio
+```
+
+2. Confira as contagens (projetos, defeitos, equipes) e leia os avisos.
+3. Para valer, é o mesmo comando sem `--ensaio` e com `--apagar-exemplos`:
+
+```
+uv run pmrd-carga --xlsm "<caminho da planilha de controle>" --pasta "<pasta das planilhas da demanda>" --equipes "<pasta das listas de equipes>" --apagar-exemplos
+```
+
+4. O programa pede o e-mail e a senha do administrador (a senha não aparece na tela), mostra o resumo e só grava se você digitar `CARREGAR`.
+
+O que saber antes:
+
+- A carga roda **uma vez**. Na segunda o banco responde "A carga inicial já foi feita".
+- Tudo acontece numa transação só: se der erro no meio, nada fica pela metade.
+- Com `--apagar-exemplos`, os projetos `EXEMPLO-` saem, as equipes de exemplo são desativadas e a importação de exemplo é apagada.
+- A contagem de dias em cada etapa começa na data da carga.
+- O chefe de turma das equipes que não estão na planilha de controle é o primeiro colaborador da lista. Corrija na tela de equipes.
+
+### Se a carga for cortada por tempo
+
+O Supabase corta em 8 segundos o que uma conta logada pede. Se a carga responder com erro de tempo (`statement timeout`), nada foi gravado. No **SQL Editor**, suba o limite, rode a carga de novo e volte ao padrão:
+
+```
+alter role authenticated set statement_timeout = '60s';
+notify pgrst, 'reload config';
+```
+
+Depois da carga:
+
+```
+alter role authenticated set statement_timeout = '8s';
+notify pgrst, 'reload config';
+```
+
+Depois da carga, abra a **Carteira** no site e confira alguns projetos de cada regional contra a planilha de controle.
+
+---
+
+## 13. Primeira importação e agendador
+
+1. Rode a primeira importação de verdade, na pasta `importador`:
+
+```
+uv run pmrd-importar --forcar
+```
+
+2. Abra a tela **Novidades** no site. A fila não vem vazia: defeitos da planilha de controle que a Enel já fechou aparecem como "corrigido", e defeitos que só existem na planilha de controle aparecem como "mudou". É esperado. Decida cada um na tela.
+3. Ligue o agendador. Ele roda o importador de hora em hora, das 6h às 22h, só com você logado:
+
+```
+powershell -ExecutionPolicy Bypass -File .\agendar.ps1
+```
+
+O log de cada rodada fica em `Desktop\PMRD\demanda\importador.log`.

@@ -3,11 +3,12 @@
 // ../pmrd-teste.env (EMAIL_TESTE e SENHA_TESTE de uma conta de teste com papel "equipe", fora do Git).
 // Só usa a chave pública. Nunca imprime a senha nem a chave.
 //
-// Confere 4 coisas:
+// Confere 5 coisas:
 //   1. quem não entrou lê 0 projetos;
 //   2. a conta de teste lê os projetos, muda a etapa de EXEMPLO-0001 e volta;
 //   3. inserir em motivos é negado (só administrador);
-//   4. a função usuarios responde 403 (só administrador).
+//   4. a função usuarios responde 403 (só administrador);
+//   5. a conta de teste lê as novidades e não consegue aceitar uma (só administrador).
 // Imprime OK ou FALHOU em cada item e sai com código 1 se algum falhar. A etapa de EXEMPLO-0001
 // volta ao valor original mesmo se algo falhar no meio (o carimbo etapa_desde e o histórico,
 // porém, registram a troca e a volta: é assim que o banco funciona).
@@ -17,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createClient } from '@supabase/supabase-js'
 import {
-  ajudaContaDeTeste, etapaDeTroca, lerEnv, negado, nomesQueFaltam, statusDoErro,
+  ajudaContaDeTeste, etapaDeTroca, lerEnv, negado, nomesQueFaltam, soAdministrador, statusDoErro,
 } from './conferir-ajudas.mjs'
 
 const PROJ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -108,6 +109,15 @@ try {
   const fn = await logado.functions.invoke('usuarios', { body: { acao: 'reativar', id: randomUUID() } })
   const status = statusDoErro(fn.error)
   item(status === 403, 'a função usuarios responde 403', `status ${status ?? 'sem resposta'}`)
+
+  // 5. Novidades (002_novidades.sql): a equipe lê a fila, mas só administrador decide.
+  // O id -1 não existe: mesmo se a regra falhasse, nada seria aceito.
+  const fila = await logado.from('novidades').select('id').limit(1)
+  item(!fila.error, 'lê as novidades',
+    fila.error ? `${fila.error.code ?? 'sem código'}: ${fila.error.message} (rodou o 002_novidades.sql?)` : '')
+  const aceitar = await logado.rpc('aceitar_novidade', { p_id: -1 })
+  item(soAdministrador(aceitar.error), 'aceitar novidade é negado',
+    aceitar.error ? `${aceitar.error.code ?? 'sem código'}: ${aceitar.error.message}` : 'a função aceitou a chamada!')
 
   await logado.auth.signOut({ scope: 'local' })
 } catch (e) {

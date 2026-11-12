@@ -25,6 +25,15 @@ export function negado({ error, data }) {
   return Array.isArray(data) && data.length === 0
 }
 
+/**
+ * A função de decidir novidades recusou quem não é administrador: só conta o erro P0001 com a
+ * frase do 002_novidades.sql. Função inexistente (002 não rodado), rede ou outra recusa NÃO
+ * provam a regra: o item deve sair FALHOU.
+ */
+export function soAdministrador(error) {
+  return error?.code === 'P0001' && /^Só administrador/.test(error.message ?? '')
+}
+
 /** Uma etapa válida e diferente da atual, para o teste de troca. */
 export function etapaDeTroca(atual) {
   return atual === 'SOLICITAR VISTORIA' ? 'EM ANÁLISE' : 'SOLICITAR VISTORIA'

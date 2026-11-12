@@ -24,7 +24,7 @@ O arquivo `supabase/exemplo.sql` traz 9 equipes, 60 projetos e os defeitos deles
 
 ## Conferir o Supabase
 
-`node scripts/conferir-supabase.mjs` confere, no Supabase de verdade, que as regras de acesso funcionam: quem não entrou não lê projetos, a conta de teste lê e muda a etapa de `EXEMPLO-0001` (e devolve), não consegue inserir em motivos e não consegue usar a função `usuarios`. Cada item sai como OK ou FALHOU.
+`node scripts/conferir-supabase.mjs` confere, no Supabase de verdade, que as regras de acesso funcionam: quem não entrou não lê projetos, a conta de teste lê e muda a etapa de `EXEMPLO-0001` (e devolve), não consegue inserir em motivos, não consegue usar a função `usuarios`, lê as novidades e não consegue aceitar nenhuma. Cada item sai como OK ou FALHOU.
 
 Ele precisa dos dados de `.env.local` e de um arquivo `pmrd-teste.env`, uma pasta acima do projeto (fora do Git), com duas linhas:
 
