@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { aplicarMigracoes, como, criarPessoa, novoBanco } from './apoio'
@@ -213,6 +215,32 @@ describe('carga_inicial', () => {
     expect((await db.query(`select 1 from public.novidades`)).rows).toEqual([])
   })
 
+  it('p_apagar_exemplos com o exemplo.sql: desativa as equipes EXEMPLO e apaga a importação EXEMPLO', async () => {
+    await db.exec(readFileSync(fileURLToPath(new URL('../../supabase/exemplo.sql', import.meta.url)), 'utf8'))
+    const r = await carregar(cargaBasica(), true)
+    expect(r.exemplos_apagados).toBe(60)
+    const { rows: eqs } = await db.query<{ lid: string; ativa: boolean }>(
+      `select lid, ativa from public.equipes order by lid`,
+    )
+    expect(eqs.filter((e) => e.lid.startsWith('EXEMPLO-'))).toHaveLength(9)
+    expect(eqs.filter((e) => e.lid.startsWith('EXEMPLO-')).every((e) => !e.ativa)).toBe(true)
+    // A equipe da carga entra ativa.
+    expect(eqs.find((e) => e.lid === 'JZN-ML-99X')).toEqual({ lid: 'JZN-ML-99X', ativa: true })
+    const { rows: imps } = await db.query<{ tipo: string }>(`select tipo from public.importacoes order by id`)
+    expect(imps).toEqual([{ tipo: 'carga' }])
+    expect((await db.query(`select 1 from public.novidades`)).rows).toEqual([])
+  })
+
+  it('sem p_apagar_exemplos as equipes e a importação EXEMPLO ficam', async () => {
+    await db.exec(readFileSync(fileURLToPath(new URL('../../supabase/exemplo.sql', import.meta.url)), 'utf8'))
+    await carregar(cargaBasica(), false)
+    const { rows } = await db.query<{ n: number }>(
+      `select count(*)::int as n from public.equipes where lid like 'EXEMPLO-%' and ativa`,
+    )
+    expect(rows[0].n).toBe(9)
+    expect((await db.query(`select 1 from public.importacoes where tipo = 'demanda'`)).rows).toHaveLength(1)
+  })
+
   it('sem p_apagar_exemplos o exemplo fica', async () => {
     await db.query(`insert into public.projetos (projeto, regional) values ('EXEMPLO-0001', 'CS')`)
     await carregar(cargaBasica(), false)
@@ -220,9 +248,10 @@ describe('carga_inicial', () => {
   })
 
   it('responsável liga ao perfil cujo nome começa com o texto, sem acento e caixa', async () => {
-    await db.query(`update public.perfis set nome = 'Ítalo Exemplo' where id = $1`, [admin])
+    // O texto vem com acento e em maiúsculas; o perfil, sem acento e em caixa mista.
+    await db.query(`update public.perfis set nome = 'Pessoa Exemplo' where id = $1`, [admin])
     const carga = cargaBasica()
-    carga.projetos[0] = { ...carga.projetos[0], responsavel: 'italo' }
+    carga.projetos[0] = { ...carga.projetos[0], responsavel: 'PÉSSOA' }
     carga.projetos[1] = { ...carga.projetos[1], responsavel: 'Ninguém Exemplo' }
     const r = await carregar(carga)
     const ps = await projetos()

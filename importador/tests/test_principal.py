@@ -124,6 +124,111 @@ def test_erro_da_nuvem_nao_derruba_nem_grava_assinatura(tmp_path):
     assert set(estado) == {"00_", "02_"}
 
 
+def test_download_ruim_seguido_do_arquivo_igual_ao_ultimo_bom_envia(tmp_path):
+    d = pasta(tmp_path)
+    assert rodar(tmp_path, d, nuvem=NuvemFalsa()) == 0
+    arquivo = next(d.glob("00_*"))
+    bom = arquivo.read_bytes()
+    # Download interrompido: a leitura dá erro e o CS sai do .estado.json.
+    arquivo.write_bytes(bom[: len(bom) // 2])
+    n2 = NuvemFalsa()
+    assert rodar(tmp_path, d, nuvem=n2) == 1
+    assert [e["p_regional"] for e in n2.de("registrar_erro_importacao")] == ["CS"]
+    estado = json.loads((d / ".estado.json").read_text(encoding="utf-8"))
+    assert set(estado) == {"01_", "02_"}
+    # O download completo, igual ao último bom, é enviado de novo (limpa o erro da tela).
+    arquivo.write_bytes(bom)
+    n3 = NuvemFalsa()
+    assert rodar(tmp_path, d, nuvem=n3) == 0
+    assert [a["p_regional"] for a in n3.de("enviar_demanda")] == ["CS"]
+    estado = json.loads((d / ".estado.json").read_text(encoding="utf-8"))
+    assert set(estado) == {"00_", "01_", "02_"}
+
+
+def test_ensaio_com_erro_nao_mexe_no_estado(tmp_path):
+    d = pasta(tmp_path)
+    assert rodar(tmp_path, d, nuvem=NuvemFalsa()) == 0
+    antes = (d / ".estado.json").read_text(encoding="utf-8")
+    next(d.glob("00_*")).write_bytes(b"nao e xlsx")
+    assert rodar(tmp_path, d, "--ensaio") == 1
+    assert (d / ".estado.json").read_text(encoding="utf-8") == antes
+
+
+class NuvemDeEntrada:
+    """Fica no lugar de Nuvem no _criar_nuvem: guarda com que e-mail e senha entrou."""
+    entradas: list = []
+
+    def __init__(self, url, chave):
+        self.url, self.chave = url, chave
+
+    def entrar(self, email, senha):
+        NuvemDeEntrada.entradas.append((self.url, self.chave, email, senha))
+
+    def rpc(self, funcao, argumentos):
+        return None
+
+
+def _env_e_robo(tmp_path, codificacao):
+    env = tmp_path / ".env.local"
+    env.write_text("PUBLIC_SUPABASE_URL=https://exemplo.test\nPUBLIC_SUPABASE_ANON_KEY=chave-exemplo\n",
+                   encoding=codificacao)
+    robo = tmp_path / "robo.txt"
+    robo.write_text("robo@exemplo.test\n", encoding=codificacao)
+    return env, robo
+
+
+def test_robo_txt_e_env_local_gravados_com_bom(tmp_path, monkeypatch):
+    import keyring
+    from pmrd_importador import principal
+    monkeypatch.setattr(principal, "Nuvem", NuvemDeEntrada)
+    monkeypatch.setattr(keyring, "get_password",
+                        lambda servico, email: "senha-exemplo" if email == "robo@exemplo.test" else None)
+    NuvemDeEntrada.entradas = []
+    env, robo = _env_e_robo(tmp_path, "utf-8-sig")
+    assert env.read_bytes().startswith(b"\xef\xbb\xbf") and robo.read_bytes().startswith(b"\xef\xbb\xbf")
+    principal._criar_nuvem(env, robo)
+    assert NuvemDeEntrada.entradas == [("https://exemplo.test", "chave-exemplo", "robo@exemplo.test", "senha-exemplo")]
+
+
+def _ler_log(d):
+    return (d / "importador.log").read_text(encoding="utf-8").splitlines()
+
+
+def test_falha_ao_entrar_por_env_ausente_vai_para_o_log(tmp_path, capsys):
+    d = pasta(tmp_path)
+    _, robo = _env_e_robo(tmp_path, "utf-8")
+    argv = ["--pasta", str(d), "--malha", str(malha(tmp_path)),
+            "--env", str(tmp_path / "nao-existe.env"), "--robo", str(robo)]
+    assert main(argv) == 1
+    linhas = _ler_log(d)
+    assert len(linhas) == 1 and "Não deu para entrar na nuvem" in linhas[0]
+    assert "Arquivo de configuração não encontrado" in linhas[0]
+    assert "Traceback" not in capsys.readouterr().out
+
+
+def test_falha_ao_entrar_que_nao_e_erro_nuvem_vai_para_o_log(tmp_path, capsys, monkeypatch):
+    # .env.local gravado em UTF-16 (Out-File padrão do PowerShell 5.1): UnicodeDecodeError.
+    d = pasta(tmp_path)
+    env, robo = _env_e_robo(tmp_path, "utf-16")
+    argv = ["--pasta", str(d), "--malha", str(malha(tmp_path)), "--env", str(env), "--robo", str(robo)]
+    assert main(argv) == 1
+    linhas = _ler_log(d)
+    assert len(linhas) == 1 and "Não deu para entrar na nuvem" in linhas[0] and "UnicodeDecodeError" in linhas[0]
+
+    # Erro do Gerenciador de Credenciais (keyring) também.
+    import keyring
+    import keyring.errors
+
+    def falha(servico, email):
+        raise keyring.errors.KeyringError("cofre indisponível")
+    monkeypatch.setattr(keyring, "get_password", falha)
+    env, robo = _env_e_robo(tmp_path, "utf-8")
+    assert main(argv) == 1
+    linhas = _ler_log(d)
+    assert len(linhas) == 2 and "KeyringError" in linhas[1]
+    assert "Traceback" not in capsys.readouterr().out
+
+
 def test_ensaio_sem_malha_avisa_e_sem_ensaio_e_erro(tmp_path, capsys):
     d = pasta(tmp_path)
     assert main(["--pasta", str(d), "--malha", str(tmp_path / "nao.geojson"), "--ensaio"]) == 0

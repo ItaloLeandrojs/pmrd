@@ -90,8 +90,8 @@ describe('textoImportacao', () => {
     expect(textoImportacao('LESTE', imp('2026-11-09T14:00:00Z'), AGORA)).toEqual({ nivel: 'ok', texto: 'Leste: lida ontem às 11:00' })
   })
 
-  it('mais de 26 horas: sem importação desde DD/MM HH:MM', () => {
-    expect(textoImportacao('CS', imp('2026-11-09T12:00:00Z'), AGORA)).toEqual({ nivel: 'velha', texto: 'CS: sem importação desde 09/11 09:00' })
+  it('mais de 26 horas: sem planilha nova desde DD/MM HH:MM', () => {
+    expect(textoImportacao('CS', imp('2026-11-09T12:00:00Z'), AGORA)).toEqual({ nivel: 'velha', texto: 'CS: sem planilha nova desde 09/11 09:00' })
   })
 
   it('erro: o texto do erro vem junto', () => {

@@ -27,7 +27,8 @@ def _ler_env(caminho: Path) -> dict[str, str]:
     if not caminho.exists():
         raise ErroNuvem(f"Arquivo de configuração não encontrado: {caminho}.")
     env = {}
-    for linha in caminho.read_text(encoding="utf-8").splitlines():
+    # utf-8-sig: o PowerShell 5.1 grava texto com BOM no começo.
+    for linha in caminho.read_text(encoding="utf-8-sig").splitlines():
         linha = linha.strip()
         if not linha or linha.startswith("#") or "=" not in linha:
             continue
@@ -43,7 +44,7 @@ def _criar_nuvem(caminho_env: Path, robo: Path) -> Nuvem:
         raise ErroNuvem("Faltam PUBLIC_SUPABASE_URL e PUBLIC_SUPABASE_ANON_KEY no .env.local.")
     if not robo.exists():
         raise ErroNuvem(f"E-mail do robô não encontrado: {robo}. Veja o README.")
-    email = robo.read_text(encoding="utf-8").strip()
+    email = robo.read_text(encoding="utf-8-sig").strip()
     import keyring
     senha = keyring.get_password(SERVICO_KEYRING, email)
     if not senha:
@@ -128,17 +129,8 @@ def main(argv: list[str] | None = None, nuvem=None) -> int:
         print(f"Malha dos municípios não encontrada: {a.malha}. Rode: uv run pmrd-importar --baixar-malha")
         return 1
 
-    if not a.ensaio and nuvem is None:
-        try:
-            nuvem = _criar_nuvem(a.env, a.robo)
-        except ErroNuvem as e:
-            print(f"Não deu para entrar na nuvem: {e}")
-            return 1
-
     arq_estado = a.pasta / ".estado.json"
     arq_log = a.pasta / "importador.log"
-    estado = _ler_estado(arq_estado)
-    falhou = False
 
     def log(msg: str) -> None:
         linha = f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}"
@@ -146,6 +138,27 @@ def main(argv: list[str] | None = None, nuvem=None) -> int:
         if not a.ensaio:
             with open(arq_log, "a", encoding="utf-8") as f:
                 f.write(linha + "\n")
+
+    # Com o agendador oculto, a falha ao entrar só aparece no importador.log.
+    if not a.ensaio and nuvem is None:
+        try:
+            nuvem = _criar_nuvem(a.env, a.robo)
+        except ErroNuvem as e:
+            log(f"Não deu para entrar na nuvem: {e}")
+            return 1
+        except Exception as e:
+            log(f"Não deu para entrar na nuvem ({type(e).__name__}: {e}).")
+            return 1
+
+    estado = _ler_estado(arq_estado)
+    falhou = False
+
+    def esquecer(prefixo: str) -> None:
+        """Leitura com erro: a regional sai do .estado.json, e o próximo arquivo bom é enviado."""
+        if a.ensaio or prefixo not in estado:
+            return
+        estado.pop(prefixo)
+        arq_estado.write_text(json.dumps(estado, indent=2), encoding="utf-8")
 
     def registrar_erro(regional: str, arquivo: str, msg: str) -> None:
         if a.ensaio:
@@ -188,6 +201,7 @@ def main(argv: list[str] | None = None, nuvem=None) -> int:
         except ErroPlanilha as e:
             falhou = True
             log(f"{regional}: erro: {e}")
+            esquecer(prefixo)
             registrar_erro(regional, nome, str(e))
         except ErroNuvem as e:
             falhou = True
@@ -196,6 +210,7 @@ def main(argv: list[str] | None = None, nuvem=None) -> int:
             falhou = True
             msg = f"Planilha {nome}: erro inesperado ao ler ({type(e).__name__})."
             log(f"{regional}: {msg}")
+            esquecer(prefixo)
             registrar_erro(regional, nome, msg)
     return 1 if falhou else 0
 

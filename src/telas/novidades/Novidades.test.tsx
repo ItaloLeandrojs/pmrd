@@ -129,7 +129,7 @@ describe('Novidades da Enel', () => {
   it('importação com mais de 26 horas avisa desde quando', async () => {
     falso.estado.tabelas.importacoes = [{ regional: 'SUL', tipo: 'demanda', quando: '2026-11-09T12:00:00Z', resumo: {}, erro: null }]
     await abrir()
-    expect(screen.getByText('Sul: sem importação desde 09/11 09:00')).toBeTruthy()
+    expect(screen.getByText('Sul: sem planilha nova desde 09/11 09:00')).toBeTruthy()
   })
 
   it('admin clica Aceitar num novo: chama aceitar_novidade com { p_id } e o cartão some', async () => {
@@ -206,6 +206,33 @@ describe('Novidades da Enel', () => {
     expect(falso.rpc).toHaveBeenCalledWith('aceitar_novidades', { p_ids: [1, 2] })
     await waitFor(() => expect(screen.queryByRole('article', { name: 'EXEMPLO-0101' })).toBeNull())
     expect(screen.queryByRole('article', { name: 'EXEMPLO-0102' })).toBeNull()
+  })
+
+  it('erro no lote: o aviso fica, a lista é recarregada do banco e a seleção é limpa', async () => {
+    const msg = 'A novidade de EXEMPLO-0102 já foi decidida ou trocada por uma mais nova. Recarregue a tela.'
+    falso.estado.rpc = (nome) => {
+      if (nome !== 'aceitar_novidades') return Promise.resolve({ data: null, error: null })
+      // Enquanto a tela estava aberta, o importador trocou a novidade do EXEMPLO-0102 por uma mais nova.
+      falso.estado.tabelas.novidades = falso.estado.tabelas.novidades
+        .filter((n) => n.id !== 2)
+        .concat({ ...novidades()[1], id: 7 })
+      return Promise.resolve({ data: null, error: { code: 'P0001', message: msg } })
+    }
+    await abrir()
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Selecionar EXEMPLO-0101' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Selecionar EXEMPLO-0102' }))
+    await userEvent.click(screen.getByRole('button', { name: /^Aceitar selecionadas/ }))
+    expect((await screen.findByRole('alert')).textContent).toContain(msg)
+    // Recarregou: a novidade nova (id 7) entrou no lugar da trocada, e nada ficou marcado.
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Aceitar selecionadas/ }).textContent).toBe('Aceitar selecionadas (0)'))
+    for (const c of screen.getAllByRole('checkbox')) expect((c as HTMLInputElement).checked).toBe(false)
+    expect(cartao('EXEMPLO-0101')).toBeTruthy()
+    expect(cartao('EXEMPLO-0102')).toBeTruthy()
+    // Marcar de novo e aceitar manda o id novo, não o trocado.
+    falso.estado.rpc = () => Promise.resolve({ data: 2, error: null })
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Selecionar todas' }))
+    await userEvent.click(screen.getByRole('button', { name: /^Aceitar selecionadas/ }))
+    expect(falso.rpc).toHaveBeenLastCalledWith('aceitar_novidades', { p_ids: [1, 7] })
   })
 
   it('erro do banco aparece em role="alert" e o cartão fica', async () => {

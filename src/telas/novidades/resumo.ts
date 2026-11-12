@@ -160,7 +160,8 @@ export function textoImportacao(
     }
   }
   if (agora.getTime() - new Date(imp.quando).getTime() > HORAS_SEM_LEITURA * HORA_MS) {
-    return { nivel: 'velha', texto: `${nome}: sem importação desde ${formatarDiaHora(imp.quando)}` }
+    // O importador não grava nada quando a planilha não muda (fim de semana, por exemplo).
+    return { nivel: 'velha', texto: `${nome}: sem planilha nova desde ${formatarDiaHora(imp.quando)}` }
   }
   return { nivel: 'ok', texto: `${nome}: lida ${quandoFoi(imp.quando, agora)}` }
 }

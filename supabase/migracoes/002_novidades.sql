@@ -98,6 +98,12 @@ create unique index if not exists novidades_uma_aberta
 
 create index if not exists novidades_importacao on public.novidades (importacao_id);
 
+-- Busca da recusada com a mesma assinatura (enviar_demanda, uma por item
+-- calculado): a tabela só cresce, porque recusadas e substituídas ficam.
+create index if not exists novidades_recusadas
+  on public.novidades (regional, projeto, tipo, assinatura)
+  where situacao = 'recusada';
+
 -- ---------------------------------------------------------------
 -- 4. Regras de linha (RLS) e privilégios
 -- ---------------------------------------------------------------
@@ -769,7 +775,10 @@ end;
 $$;
 
 -- Em lote só novo e mudou (não pedem escolha). Tudo ou nada: o primeiro
--- erro desfaz o lote inteiro e a mensagem dele sobe. Devolve quantas.
+-- erro desfaz o lote inteiro e a mensagem dele sobe, com o projeto na frente.
+-- Antes do laço confere se todas ainda estão abertas: o importador de hora em
+-- hora troca as abertas por mais novas (substituida) com a tela aberta.
+-- Devolve quantas. As mensagens (raise exception) são texto de tela.
 create or replace function public.aceitar_novidades(p_ids bigint[])
 returns int
 language plpgsql
@@ -777,8 +786,9 @@ security definer
 set search_path = ''
 as $$
 declare
-  v_id bigint;
-  v_n  int := 0;
+  v_id      bigint;
+  v_projeto text;
+  v_n       int := 0;
 begin
   if not public.eh_admin() then
     raise exception 'Só administrador decide as novidades.';
@@ -790,13 +800,34 @@ begin
     raise exception 'Em lote, só projetos novos e mudanças. Decida os outros um a um.';
   end if;
 
+  -- A primeira marcada (na ordem pedida) que não está mais aberta.
+  select n.projeto into v_projeto
+    from unnest(coalesce(p_ids, '{}')) with ordinality as u (id, ordem)
+    join public.novidades n on n.id = u.id
+   where n.situacao <> 'aberta'
+   order by u.ordem
+   limit 1;
+  if found then
+    raise exception 'A novidade de % já foi decidida ou trocada por uma mais nova. Recarregue a tela.', v_projeto;
+  end if;
+
   -- Na ordem pedida, sem repetir.
-  for v_id in
-    select u.id from unnest(coalesce(p_ids, '{}')) with ordinality as u (id, ordem)
+  for v_id, v_projeto in
+    select u.id, min(n.projeto)
+      from unnest(coalesce(p_ids, '{}')) with ordinality as u (id, ordem)
+      left join public.novidades n on n.id = u.id
      group by u.id
      order by min(u.ordem)
   loop
-    perform public.aceitar_novidade(v_id, null);
+    begin
+      perform public.aceitar_novidade(v_id, null);
+    exception when raise_exception then
+      -- Só as frases das funções (P0001) ganham o projeto na frente; outro erro sobe como veio.
+      if v_projeto is null then
+        raise;
+      end if;
+      raise exception '%: %', v_projeto, sqlerrm;
+    end;
     v_n := v_n + 1;
   end loop;
   return v_n;
@@ -888,7 +919,8 @@ $$;
 --   solicitantes: nomes;
 --   avisos:       textos do importador; arquivo: nome do xlsm.
 -- Numa transação: (se p_apagar_exemplos) apaga projetos EXEMPLO-%, os defeitos
--- e as novidades deles; insere equipes (a que já existe fica), solicitantes
+-- e as novidades deles e a importação EXEMPLO, e desativa as equipes EXEMPLO-%;
+-- insere equipes (a que já existe fica), solicitantes
 -- que ainda não existem pelo nome, projetos e defeitos. Projeto que já existe
 -- e defeito que já está em outro projeto viram aviso, não erro. O responsável
 -- liga ao único perfil cujo nome começa com o texto; sem par único, fica vazio
@@ -966,11 +998,18 @@ begin
   v_avisos := coalesce(p_carga -> 'avisos', '[]'::jsonb);
 
   -- ---- Exemplos ----
+  -- As equipes EXEMPLO são desativadas (nada se apaga de equipe) e a
+  -- importação EXEMPLO sai, para a faixa não mostrar a leitura de exemplo.
   if coalesce(p_apagar_exemplos, false) then
     delete from public.novidades where projeto like 'EXEMPLO-%';
     delete from public.defeitos where projeto like 'EXEMPLO-%';
     delete from public.projetos where projeto like 'EXEMPLO-%';
     get diagnostics v_apagados = row_count;
+    update public.equipes set ativa = false where lid like 'EXEMPLO-%' and ativa;
+    delete from public.importacoes i
+     where i.arquivo like 'EXEMPLO-%'
+       and i.tipo <> 'carga'
+       and not exists (select 1 from public.novidades n where n.importacao_id = i.id);
   end if;
 
   -- ---- Equipes e solicitantes ----

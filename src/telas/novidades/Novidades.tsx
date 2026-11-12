@@ -100,6 +100,7 @@ function NovidadesCarregadas({ regional, papel, agora: agoraFixo, carga }: Props
   const admin = papel === 'admin'
   const agora = useMemo(() => agoraFixo ?? new Date(), [agoraFixo])
   const [lista, setLista] = useState(carga.novidades)
+  const [info, setInfo] = useState(carga.info)
   const [aba, setAba] = useState<TipoNovidade>(() => ABAS.find((a) => carga.novidades.some((n) => n.tipo === a.id))?.id ?? 'novo')
   const [marcadas, setMarcadas] = useState<Set<number>>(() => new Set())
   const [salvando, setSalvando] = useState<{ id: number | 'lote'; rotulo: string } | null>(null)
@@ -143,6 +144,18 @@ function NovidadesCarregadas({ regional, papel, agora: agoraFixo, carga }: Props
     painel.current?.focus()
   }
 
+  /** Lê de novo as abertas da regional. Se falhar, fica a lista atual (o aviso do erro já está na tela). */
+  async function recarregar() {
+    try {
+      const novidades = await listarNovidades(c, regional)
+      const novaInfo = await infoDosProjetos(c, novidades.filter((n) => n.tipo !== 'novo').map((n) => n.projeto))
+      setLista(novidades)
+      setInfo(novaInfo)
+    } catch {
+      // sem recarga: a lista atual continua
+    }
+  }
+
   /** Uma gravação por vez. O cartão só sai da lista quando o banco confirma. */
   async function gravar(id: number | 'lote', rotulo: string, ids: number[], acao: () => Promise<unknown>, pronto: string) {
     if (ocupado.current) return
@@ -159,6 +172,12 @@ function NovidadesCarregadas({ regional, papel, agora: agoraFixo, carga }: Props
       // Alguém decidiu antes (ou a resposta anterior se perdeu): a novidade não está mais aberta.
       if (msg === JA_DECIDIDA && id !== 'lote') tirar(ids)
       setAviso(msg)
+      // Lote recusado (uma marcada foi trocada pelo importador, por exemplo): a lista vem de novo
+      // do banco e a seleção é limpa, para a próxima tentativa não repetir o mesmo erro.
+      if (id === 'lote') {
+        setMarcadas(new Set())
+        await recarregar()
+      }
     } finally {
       ocupado.current = false
       setSalvando(null)
@@ -259,7 +278,7 @@ function NovidadesCarregadas({ regional, papel, agora: agoraFixo, carga }: Props
                   <CartaoNovidade
                     key={n.id}
                     novidade={n}
-                    info={carga.info.get(n.projeto)}
+                    info={info.get(n.projeto)}
                     admin={admin}
                     selecionavel={emLote}
                     selecionada={marcadas.has(n.id)}

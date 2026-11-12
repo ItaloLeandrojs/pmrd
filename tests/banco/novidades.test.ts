@@ -1,6 +1,11 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { aplicarMigracoes, como, criarPessoa, novoBanco } from './apoio'
+
+const PASTA_MIGRACOES = fileURLToPath(new URL('../../supabase/migracoes/', import.meta.url))
 
 let modelo: PGlite
 let db: PGlite
@@ -97,6 +102,26 @@ describe('002_novidades: importador', () => {
 
   it('rodar as migrações de novo não dá erro', async () => {
     await aplicarMigracoes(db)
+  })
+
+  it('rodar só o 001 de novo depois do 002 mantém o importador sem leitura', async () => {
+    await db.exec(readFileSync(join(PASTA_MIGRACOES, '001_base.sql'), 'utf8'))
+    const id = await criarPessoa(db, { papel: 'importador' })
+    expect(await como(db, { id }, 'select public.eh_do_pcm() as v')).toEqual([{ v: false }])
+    expect(await como(db, { id }, 'select count(*)::int as n from public.projetos')).toEqual([{ n: 0 }])
+    expect(await como(db, { id }, 'select count(*)::int as n from public.novidades')).toEqual([{ n: 0 }])
+    const equipe = await criarPessoa(db, { papel: 'equipe' })
+    expect(await como(db, { id: equipe }, 'select count(*)::int as n from public.projetos')).toEqual([{ n: 1 }])
+  })
+
+  it('a busca da recusada tem índice parcial (regional, projeto, tipo, assinatura)', async () => {
+    await aplicarMigracoes(db)
+    const { rows } = await db.query<{ indexdef: string }>(
+      `select indexdef from pg_indexes where schemaname = 'public' and indexname = 'novidades_recusadas'`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0].indexdef).toContain('(regional, projeto, tipo, assinatura)')
+    expect(rows[0].indexdef).toContain("situacao = 'recusada'")
   })
 })
 

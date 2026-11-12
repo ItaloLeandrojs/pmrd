@@ -520,7 +520,8 @@ describe('aceitar_novidades: lote', () => {
       await novidade('EXEMPLO-0002', 'novo', dadosNovo('EXEMPLO-0002', [defeito('-9000002')])),
       await novidade('EXEMPLO-0003', 'novo', dadosNovo('EXEMPLO-0003', [defeito('-9000003')])),
     ]
-    await expect(aceitarLote(ids)).rejects.toThrow('O defeito -9000002 já está no projeto EXEMPLO-0009.')
+    // A mensagem diz de qual projeto do lote é o erro.
+    await expect(aceitarLote(ids)).rejects.toThrow('EXEMPLO-0002: O defeito -9000002 já está no projeto EXEMPLO-0009.')
     expect(await contar('projetos')).toBe(1)
     for (const id of ids) expect((await lerNovidade(id)).situacao).toBe('aberta')
   })
@@ -572,8 +573,35 @@ describe('aceitar_novidades: lote', () => {
     const a = await novidade('EXEMPLO-0001', 'novo', dadosNovo('EXEMPLO-0001', [defeito('-9000001')]))
     const b = await novidade('EXEMPLO-0002', 'novo', dadosNovo('EXEMPLO-0002', [defeito('-9000002')]))
     await recusar(b)
-    await expect(aceitarLote([a, b])).rejects.toThrow('Esta novidade já foi decidida.')
+    await expect(aceitarLote([a, b])).rejects.toThrow(
+      'A novidade de EXEMPLO-0002 já foi decidida ou trocada por uma mais nova. Recarregue a tela.',
+    )
     expect(await projeto('EXEMPLO-0001')).toBeUndefined()
+  })
+
+  it('lote com uma marcada substituida (o importador trocou): erro com o projeto e nada gravado', async () => {
+    await projetoNaCarteira('EXEMPLO-0005', [{ id: '-9000005' }])
+    const ids = [
+      await novidade('EXEMPLO-0001', 'novo', dadosNovo('EXEMPLO-0001', [defeito('-9000001')])),
+      await novidade('EXEMPLO-0005', 'mudou', {
+        entram: [defeito('-9000006')],
+        saem: ['-9000005'],
+        prioridade_antes: 7,
+        prioridade_nova: null,
+        alimentadores: ['EXE01S1'],
+      }),
+      await novidade('EXEMPLO-0003', 'novo', dadosNovo('EXEMPLO-0003', [defeito('-9000003')])),
+    ]
+    await db.query(`update public.novidades set situacao = 'substituida', decidida_em = now() where id = $1`, [ids[2]])
+    await expect(aceitarLote(ids)).rejects.toThrow(
+      'A novidade de EXEMPLO-0003 já foi decidida ou trocada por uma mais nova. Recarregue a tela.',
+    )
+    expect(await projeto('EXEMPLO-0001')).toBeUndefined()
+    expect(await projeto('EXEMPLO-0003')).toBeUndefined()
+    expect((await defeitos('EXEMPLO-0005')).map((d) => [d.id_gom, d.situacao])).toEqual([['-9000005', 'pendente']])
+    expect((await lerNovidade(ids[0])).situacao).toBe('aberta')
+    expect((await lerNovidade(ids[1])).situacao).toBe('aberta')
+    expect((await lerNovidade(ids[2])).situacao).toBe('substituida')
   })
 })
 

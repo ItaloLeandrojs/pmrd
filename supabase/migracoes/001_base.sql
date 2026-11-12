@@ -44,7 +44,9 @@ create table if not exists public.perfis (
 
 -- ---------------------------------------------------------------
 -- 3. Quem é do PCM e quem é administrador
---    (security definer: lê perfis sem cair nas regras de linha de perfis)
+--    (security definer: lê perfis sem cair nas regras de linha de perfis).
+--    eh_do_pcm exige papel admin ou equipe, igual ao 002: rodar este arquivo
+--    de novo depois do 002 não devolve leitura ao robô importador.
 -- ---------------------------------------------------------------
 create or replace function public.eh_do_pcm()
 returns boolean
@@ -57,6 +59,7 @@ as $$
     select 1 from public.perfis
      where id = (select auth.uid())
        and ativo
+       and papel in ('admin', 'equipe')
   );
 $$;
 
