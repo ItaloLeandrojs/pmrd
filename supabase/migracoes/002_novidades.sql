@@ -148,7 +148,9 @@ grant all on sequence public.importacoes_id_seq, public.novidades_id_seq to serv
 --   corrigido defeitos fechados que na carteira estão pendente ou
 --             programado, por projeto;
 --   saiu      projeto da Enel, não marcado como fora da demanda, fora das
---             etapas finais, que não aparece na aba.
+--             etapas finais, que não aparece na aba e que não tem nenhum
+--             defeito (não removido) ativo no grupo SEM-PROJETO-<regional>
+--             deste envio (só perdeu o número na Enel: decisão A de 12/11).
 -- Defeito do grupo SEM-PROJETO-<regional> que já está em outro projeto (não
 -- removido) fica onde o PCM o pôs: sai do grupo e não conta como "saem"
 -- (decisão de 11/11).
@@ -438,6 +440,12 @@ begin
          and not p.saiu_da_demanda
          and p.etapa not in ('EXECUTADA', 'TRANSFERIDA', 'NÃO EXECUTÁVEL')
          and not (p.projeto = any (v_presentes))
+         -- Só perdeu o número na Enel (decisão A de 12/11): um defeito dele
+         -- (não removido) veio ativo no grupo sem projeto deste envio.
+         and not exists (select 1 from public.defeitos x
+                          where x.projeto = p.projeto
+                            and x.situacao <> 'removido'
+                            and x.id_gom = any (v_ids_sem_proj))
     )
     select c.projeto, c.tipo, c.dados, c.chave
       from (select * from novos
@@ -541,8 +549,11 @@ grant execute on function public.registrar_erro_importacao(text, text, text) to 
 --    estrutura, alimentador, estado_enel, lat, lng}]}.
 -- Cria o projeto (origem enel, EM ANÁLISE, prioridade = a menor dos
 -- defeitos, lat/lng = média dos defeitos com coordenada) e os defeitos
--- pendentes. Usada pelo aceitar_novidade e pela carga inicial; não tem
--- grant para authenticated (quem chama confere quem pode).
+-- pendentes. Defeito que já está em outro projeto: se lá está removido, é
+-- levado para este (pendente, com os campos da Enel; decisão B de 12/11);
+-- senão, erro e nada gravado. Usada pelo aceitar_novidade e pela carga
+-- inicial (que tira antes os defeitos que já existem); não tem grant para
+-- authenticated (quem chama confere quem pode).
 create or replace function public.criar_projeto_da_demanda(p_regional text, p_dados jsonb)
 returns void
 language plpgsql
@@ -563,9 +574,12 @@ begin
     raise exception 'Este projeto já está na carteira. Recuse esta novidade: a próxima importação mostra o que mudou.';
   end if;
 
+  -- Defeito em outro projeto e não removido: erro, nada gravado. O removido
+  -- em outro projeto é levado para este, mais abaixo (decisão B de 12/11).
   select d.value ->> 'id_gom', x.projeto into v_id, v_outro
     from jsonb_array_elements(v_defeitos) d
     join public.defeitos x on x.id_gom = d.value ->> 'id_gom'
+   where x.situacao <> 'removido'
    order by d.value ->> 'id_gom' collate "C"
    limit 1;
   if found then
@@ -586,6 +600,22 @@ begin
            where jsonb_typeof(d.value -> 'lat') = 'number'
              and jsonb_typeof(d.value -> 'lng') = 'number') c;
 
+  -- Levado: o removido de outro projeto vem para este, pendente, com o que a
+  -- Enel mostra agora (igual ao reaberto do mudou).
+  update public.defeitos x
+     set projeto     = v_projeto,
+         situacao    = 'pendente',
+         prioridade  = case when jsonb_typeof(d.value -> 'prioridade') = 'number'
+                            then (d.value ->> 'prioridade')::int end,
+         estrutura   = d.value ->> 'estrutura',
+         alimentador = d.value ->> 'alimentador',
+         estado_enel = d.value ->> 'estado_enel',
+         lat = case when jsonb_typeof(d.value -> 'lat') = 'number' then (d.value ->> 'lat')::double precision end,
+         lng = case when jsonb_typeof(d.value -> 'lng') = 'number' then (d.value ->> 'lng')::double precision end
+    from jsonb_array_elements(v_defeitos) d
+   where x.id_gom = d.value ->> 'id_gom'
+     and x.situacao = 'removido';
+
   insert into public.defeitos (id_gom, projeto, prioridade, estrutura, alimentador, estado_enel, situacao, lat, lng)
   select d.value ->> 'id_gom', v_projeto,
          case when jsonb_typeof(d.value -> 'prioridade') = 'number' then (d.value ->> 'prioridade')::int end,
@@ -593,6 +623,7 @@ begin
          case when jsonb_typeof(d.value -> 'lat') = 'number' then (d.value ->> 'lat')::double precision end,
          case when jsonb_typeof(d.value -> 'lng') = 'number' then (d.value ->> 'lng')::double precision end
     from jsonb_array_elements(v_defeitos) d
+   where not exists (select 1 from public.defeitos x where x.id_gom = d.value ->> 'id_gom')
    order by d.value ->> 'id_gom' collate "C";
 end;
 $$;
@@ -604,8 +635,10 @@ $$;
 -- que já tinha sido gravado. O histórico do plano 1 registra o admin como
 -- quem, porque o gatilho lê o auth.uid() de quem chamou.
 --   novo      cria o projeto (criar_projeto_da_demanda).
---   mudou     entram viram pendente (um removido do mesmo projeto volta com
---             os campos novos); saem pendente ou programado viram removido;
+--   mudou     entram viram pendente (um removido, deste ou de outro projeto,
+--             vem para este com os campos novos: decisão B de 12/11; em
+--             outro projeto e não removido, erro); saem pendente ou
+--             programado viram removido;
 --             prioridade_nova (se não for nula) e alimentadores vão para o
 --             projeto. Etapa, próxima ação, responsável e município ficam.
 --   saiu      p_escolha MANTER, TRANSFERIDA ou NÃO EXECUTÁVEL; sempre marca
@@ -663,12 +696,12 @@ begin
                 v_d ->> 'estrutura', v_d ->> 'alimentador', v_d ->> 'estado_enel', 'pendente',
                 case when jsonb_typeof(v_d -> 'lat') = 'number' then (v_d ->> 'lat')::double precision end,
                 case when jsonb_typeof(v_d -> 'lng') = 'number' then (v_d ->> 'lng')::double precision end);
-      elsif v_atual.projeto <> v_nov.projeto then
-        raise exception 'O defeito % já está no projeto %.', v_id, v_atual.projeto;
       elsif v_atual.situacao = 'removido' then
-        -- Reaberto: volta com o que a Enel mostra agora.
+        -- Reaberto (removido deste projeto) ou levado (removido de outro
+        -- projeto, decisão B de 12/11): volta com o que a Enel mostra agora.
         update public.defeitos
-           set situacao    = 'pendente',
+           set projeto     = v_nov.projeto,
+               situacao    = 'pendente',
                prioridade  = case when jsonb_typeof(v_d -> 'prioridade') = 'number'
                                   then (v_d ->> 'prioridade')::int end,
                estrutura   = v_d ->> 'estrutura',
@@ -677,6 +710,8 @@ begin
                lat = case when jsonb_typeof(v_d -> 'lat') = 'number' then (v_d ->> 'lat')::double precision end,
                lng = case when jsonb_typeof(v_d -> 'lng') = 'number' then (v_d ->> 'lng')::double precision end
          where id_gom = v_id;
+      elsif v_atual.projeto <> v_nov.projeto then
+        raise exception 'O defeito % já está no projeto %.', v_id, v_atual.projeto;
       end if;
       -- Já está no projeto e não foi removido (alguém pôs à mão depois da
       -- foto): fica como está.

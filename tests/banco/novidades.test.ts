@@ -658,4 +658,71 @@ describe('002_novidades: enviar_demanda', () => {
     const mudou = (await novidades()).find((n) => n.tipo === 'mudou')!
     expect(mudou.dados.saem).toEqual(['-9000002'])
   })
+
+  // Decisão A de 12/11: projeto que só perdeu o número na Enel não "sai".
+  it('projeto enel cujos defeitos vêm todos sem projeto não gera saiu, nem na 2ª leitura', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002' }])
+    const envio: Envio = {
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001', '-9000002'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    }
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+    expect(await enviar(envio)).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+    expect(await novidades()).toEqual([])
+  })
+
+  it('basta um defeito do projeto vir sem projeto para não gerar saiu', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002' }, { id: '-9000003' }])
+    const resumo = await enviar({
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000002', '-9000007'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    })
+    expect(resumo).toMatchObject({ novo: 1, saiu: 0 })
+    expect((await novidades()).map((n) => [n.projeto, n.tipo])).toEqual([['SEM-PROJETO-SUL', 'novo']])
+  })
+
+  it('quando os defeitos somem de vez (nem no projeto, nem sem projeto), o saiu aparece', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002' }])
+    await enviar({ projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001'])], presentes: ['SEM-PROJETO-SUL'] })
+    expect(await novidades()).toEqual([])
+    const resumo = await enviar({
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000005'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    })
+    expect(resumo).toMatchObject({ saiu: 1 })
+    expect((await novidades()).map((n) => [n.projeto, n.tipo, n.situacao])).toEqual([
+      ['SEM-PROJETO-SUL', 'novo', 'aberta'],
+      ['EXEMPLO-0001', 'saiu', 'aberta'],
+    ])
+  })
+
+  it('projeto enel que sumiu sem nenhum defeito no grupo sem projeto continua gerando saiu', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000002', situacao: 'removido' }])
+    // -9000002 vem sem projeto, mas o PCM já o tinha tirado: não segura o projeto.
+    const resumo = await enviar({
+      projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000002', '-9000005'])],
+      presentes: ['SEM-PROJETO-SUL'],
+    })
+    expect(resumo).toMatchObject({ novo: 1, saiu: 1 })
+    const saiu = (await novidades()).find((n) => n.tipo === 'saiu')!
+    expect(saiu).toMatchObject({ projeto: 'EXEMPLO-0001', situacao: 'aberta' })
+  })
+
+  it('saiu aberto antes de os defeitos virem sem projeto vira substituída (deixou de valer)', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }])
+    await enviar({ projetos: [], presentes: [] })
+    expect((await novidades()).map((n) => [n.tipo, n.situacao])).toEqual([['saiu', 'aberta']])
+    const envio: Envio = { projetos: [projetoEnvio('SEM-PROJETO-SUL', ['-9000001'])], presentes: ['SEM-PROJETO-SUL'] }
+    expect(await enviar(envio)).toMatchObject({ novo: 0, saiu: 0 })
+    expect((await novidades()).map((n) => [n.tipo, n.situacao])).toEqual([['saiu', 'substituida']])
+    expect(await enviar(envio)).toMatchObject({ novo: 0, saiu: 0 })
+    expect((await novidades()).map((n) => [n.tipo, n.situacao])).toEqual([['saiu', 'substituida']])
+  })
+
+  it('projeto manual continua sem saiu e etapa final também, com ou sem grupo sem projeto', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }], { origem: 'manual' })
+    await projetoNaCarteira('EXEMPLO-0002', [{ id: '-9000002' }], { etapa: 'EXECUTADA' })
+    expect(await enviar({ projetos: [], presentes: [] })).toMatchObject({ saiu: 0 })
+    expect(await novidades()).toEqual([])
+  })
 })

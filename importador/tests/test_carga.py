@@ -561,3 +561,66 @@ def test_7c_main_pasta_de_equipes_inexistente_e_erro(tmp_path, capsys):
     args = preparar(tmp_path)
     assert main(["--ensaio", *args, "--equipes", str(tmp_path / "nao-existe")], nuvem=NuvemFalsa()) == 1
     assert "nao-existe" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------- Tarefa 7d: "X / Y" com menos prioridades que IDs
+
+def demanda_7d():
+    """SUL: -9000001 ativo no próprio projeto (TLC), -9000002 fechado (WTS), -9000004 fechado (Obra)."""
+    d = vazias()
+    d["SUL"] = Demanda([
+        defeito("-9000001", "EXEMPLO-0001", demanda="TLC"),
+        defeito("-9000002", "EXEMPLO-0001", estado="EXECUTADA", demanda="WTS"),
+        defeito("-9000004", None, estado="CORRIGIDO EMERGENCIAL", demanda="Obra"),
+    ])
+    return d
+
+
+def test_7d_menos_prioridades_que_ids_usa_a_prioridade_da_enel(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000001\n-9000002\n-9000003\n-9000004",
+                             "PRIORIDADE": "Conj Crítico / Ouvidoria"})]
+    c = montar(tmp_path, carteira=car, demandas=demanda_7d(), coords={})
+    [p] = c["projetos"]
+    prio = {d["id_gom"]: d["prioridade"] for d in p["defeitos"]}
+    assert prio == {"-9000001": 5,      # ativo na demanda: TLC da demanda
+                    "-9000002": 9,      # fechado na demanda: WTS da demanda
+                    "-9000003": None,   # fora da demanda: sem prioridade
+                    "-9000004": 8}      # fechado no grupo sem projeto: Obra da demanda
+    avisos = [a for a in c["avisos"] if "prioridades para" in a]
+    assert avisos == ["Projeto EXEMPLO-0001 (linha 2 do xlsm): 2 prioridades para 4 ID GOM; "
+                      "3 com a prioridade da Enel e 1 sem prioridade."]
+    # A prioridade do projeto continua a menor dos ativos da demanda.
+    assert p["prioridade"] == 5
+
+
+def test_7d_todos_com_a_prioridade_da_enel_nao_avisa(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000001\n-9000002\n-9000004",
+                             "PRIORIDADE": "Conj Crítico / Ouvidoria"})]
+    c = montar(tmp_path, carteira=car, demandas=demanda_7d(), coords={})
+    assert [d["prioridade"] for d in c["projetos"][0]["defeitos"]] == [5, 9, 8]
+    assert not any("prioridades para" in a for a in c["avisos"])
+
+
+def test_7d_projeto_manual_tambem_usa_a_prioridade_da_enel(tmp_path):
+    car = [linha_carteira(PROJETO="EXEMPLO-0002", **{"ID GOM": "-9000002\n-9000003\n-9000004",
+                                                     "PRIORIDADE": "Conj Crítico\nOuvidoria"})]
+    c = montar(tmp_path, carteira=car, demandas=demanda_7d(), coords={})
+    [p] = c["projetos"]
+    assert p["origem"] == "manual"
+    assert [d["prioridade"] for d in p["defeitos"]] == [9, None, 8]
+    assert any("2 prioridades para 3 ID GOM; 2 com a prioridade da Enel e 1 sem prioridade." in a
+               for a in c["avisos"])
+    # Sem ativos da demanda: a menor das outras (as do xlsm), como antes.
+    assert p["prioridade"] == 3
+
+
+def test_7d_uma_prioridade_e_contagem_igual_continuam_valendo_o_xlsm(tmp_path):
+    car = [linha_carteira(**{"ID GOM": "-9000002\n-9000004", "PRIORIDADE": "Ouvidoria"}),
+           linha_carteira(PROJETO="EXEMPLO-0002", **{"ID GOM": "-9000003\n-9000005", "PRIORIDADE": "RNT / Justiça"})]
+    d = demanda_7d()
+    d["SUL"].defeitos.append(defeito("-9000005", None, estado="EXECUTADA", demanda="WTS"))
+    c = montar(tmp_path, carteira=car, demandas=d, coords={})
+    p = por_nome(c)
+    assert [x["prioridade"] for x in p["EXEMPLO-0001"]["defeitos"] if x["id_gom"] != "-9000001"] == [3, 3]
+    assert [x["prioridade"] for x in p["EXEMPLO-0002"]["defeitos"]] == [2, 1]
+    assert not any("prioridades para" in a for a in c["avisos"])

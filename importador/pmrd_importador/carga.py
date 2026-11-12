@@ -140,7 +140,9 @@ def ler_carteira_xlsm(caminho: Path) -> list[dict]:
     """Aba CARTEIRA: uma linha por projeto (linha sem PROJETO é ignorada).
     Cada linha traz também 'linha' (número na planilha), 'avisos' e
     'defeitos_xlsm' [{id_gom, prioridade_nome, estrutura}], com a prioridade e a
-    estrutura alinhadas aos IDs pelas linhas cruas da célula ID GOM."""
+    estrutura alinhadas aos IDs pelas linhas cruas da célula ID GOM, e
+    'prioridade_da_enel' (mais de uma prioridade e a contagem não bate com a
+    de IDs) com 'n_ids_crus'."""
     caminho = Path(caminho)
     wb = abrir(caminho)
     try:
@@ -173,9 +175,10 @@ def ler_carteira_xlsm(caminho: Path) -> list[dict]:
                 item[chave] = _texto(v)
 
         crus, prios, ests = item["ids"], item["prioridades"], item["estruturas"]
-        if len(prios) > 1 and len(prios) != len(crus):
-            item["avisos"].append(f"{onde}: {len(prios)} prioridades para {len(crus)} ID GOM; "
-                                  "defeitos do xlsm sem prioridade.")
+        # Mais de uma prioridade e a contagem não bate com a de IDs: cada ID usa a
+        # da Enel (montar_carga, decisão C de 12/11), que também faz o aviso.
+        item["prioridade_da_enel"] = len(prios) > 1 and len(prios) != len(crus)
+        item["n_ids_crus"] = len(crus)
         ids, defeitos = [], []
         for k, cru in enumerate(crus):
             i = id_texto(cru)
@@ -299,6 +302,16 @@ def montar_carga(carteira: list[dict], demandas: dict[str, Demanda], coords: dic
     fechados = {f["id_gom"]: f["estado_enel"] for env in envios.values() for f in env["fechados"]}
     sem_projeto = {f"SEM-PROJETO-{reg}" for reg in envios}
     reclamados: set[str] = set()     # IDs do SEM-PROJETO que o PCM já pôs num projeto do xlsm
+    # Prioridade da coluna DEMANDA de todo ID da demanda (ativo ou fechado), por regional.
+    prioridade_enel = {reg: {x.id_gom: prioridade_da_demanda(x.demanda) for x in d.defeitos}
+                       for reg, d in demandas.items()}
+
+    def da_enel(id_gom: str, regional: str) -> int | None:
+        """A da planilha da regional do projeto; senão, a de outra regional onde o ID está."""
+        for reg in [regional] + [r for r in prioridade_enel if r != regional]:
+            if id_gom in prioridade_enel.get(reg, {}):
+                return prioridade_enel[reg][id_gom]
+        return None
 
     regionais_do: dict[str, list[str]] = {}
     for reg, env in envios.items():
@@ -364,10 +377,20 @@ def montar_carga(carteira: list[dict], demandas: dict[str, Demanda], coords: dic
             ja.add(id_gom)
             ponto = coords.get(id_gom)
             defeitos.append({
-                "id_gom": id_gom, "prioridade": prioridade_da_demanda(dx["prioridade_nome"]),
+                "id_gom": id_gom,
+                "prioridade": (da_enel(id_gom, regional) if l["prioridade_da_enel"]
+                               else prioridade_da_demanda(dx["prioridade_nome"])),
                 "estrutura": dx["estrutura"], "alimentador": None, "estado_enel": fechados.get(id_gom),
                 "lat": float(ponto[0]) if ponto else None, "lng": float(ponto[1]) if ponto else None,
             })
+
+        if l["prioridade_da_enel"]:
+            do_xlsm = {dx["id_gom"] for dx in l["defeitos_xlsm"]}
+            finais = [d["prioridade"] for d in defeitos if d["id_gom"] in do_xlsm]
+            sem = sum(p is None for p in finais)
+            if sem:
+                avisos.append(f"{onde}: {len(l['prioridades'])} prioridades para {l['n_ids_crus']} ID GOM; "
+                              f"{len(finais) - sem} com a prioridade da Enel e {sem} sem prioridade.")
 
         # Enel: a menor dos ativos da demanda do projeto (como o enviar_demanda);
         # senão, a menor do xlsm e dos defeitos que vieram do SEM-PROJETO.

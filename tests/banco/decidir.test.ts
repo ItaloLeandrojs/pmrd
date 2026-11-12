@@ -376,7 +376,8 @@ describe('aceitar_novidade: mudou', () => {
 
   it('defeito que entra mas está em outro projeto: erro e nada gravado', async () => {
     await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }])
-    await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000003', situacao: 'removido' }])
+    // Programado em outro projeto (removido em outro projeto é levado: Decisão B de 12/11).
+    await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000003', situacao: 'programado' }])
     const id = await novidade('EXEMPLO-0001', 'mudou', {
       entram: [defeito('-9000002'), defeito('-9000003')],
       saem: ['-9000001'],
@@ -639,6 +640,178 @@ describe('do envio ao aceite', () => {
       ['-9000003', 'pendente'],
     ])
     expect(await projeto('EXEMPLO-0001')).toMatchObject({ prioridade: 2, alimentadores: ['EXE05S5'] })
+  })
+})
+
+// Decisão B de 12/11: defeito removido em outro projeto é levado para o projeto da novidade.
+describe('aceitar_novidade: defeito removido em outro projeto', () => {
+  const campos = {
+    prioridade: 4,
+    estrutura: 'EXEMPLO-NOVA',
+    alimentador: 'EXE09S9',
+    estado_enel: 'EXECUÇÃO',
+    lat: -6.5,
+    lng: -38.5,
+  }
+
+  async function defeitoNoBanco(id: string) {
+    const { rows } = await db.query<Record<string, unknown>>(
+      `select id_gom, projeto, prioridade, estrutura, alimentador, estado_enel, situacao, lat, lng
+         from public.defeitos where id_gom = $1`,
+      [id],
+    )
+    return rows[0]
+  }
+
+  /** Como o defeito levado deve ficar: no projeto novo, pendente, com os campos da Enel. */
+  const levado = (id_gom: string, projeto: string) => ({ id_gom, projeto, situacao: 'pendente', ...campos })
+
+  it('novo do SEM-PROJETO leva o removido (projeto novo, pendente, campos da Enel) e aceita os outros', async () => {
+    await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000001' }, { id: '-9000002', situacao: 'removido' }], {
+      origem: 'manual',
+    })
+    const id = await novidade(
+      'SEM-PROJETO-SUL',
+      'novo',
+      dadosNovo('SEM-PROJETO-SUL', [defeito('-9000002', campos), defeito('-9000003', { prioridade: 9 })]),
+    )
+    await aceitar(id)
+    expect(await defeitoNoBanco('-9000002')).toEqual(levado('-9000002', 'SEM-PROJETO-SUL'))
+    expect((await defeitos('SEM-PROJETO-SUL')).map((d) => [d.id_gom, d.situacao])).toEqual([
+      ['-9000002', 'pendente'],
+      ['-9000003', 'pendente'],
+    ])
+    expect((await defeitos('EXEMPLO-0009')).map((d) => d.id_gom)).toEqual(['-9000001'])
+    expect(await projeto('SEM-PROJETO-SUL')).toMatchObject({ origem: 'enel', etapa: 'EM ANÁLISE', prioridade: 4 })
+    expect((await lerNovidade(id)).situacao).toBe('aceita')
+  })
+
+  it('o histórico registra a mudança de projeto do defeito com quem = o admin', async () => {
+    await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000002', situacao: 'removido' }])
+    const id = await novidade('EXEMPLO-0001', 'novo', dadosNovo('EXEMPLO-0001', [defeito('-9000002')]))
+    await aceitar(id)
+    const { rows } = await db.query<{ quem: string; antes: { projeto: string }; depois: { projeto: string } }>(
+      `select quem, antes, depois from public.historico
+        where tabela = 'defeitos' and chave = '-9000002' and operacao = 'UPDATE'`,
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      quem: admin,
+      antes: { projeto: 'EXEMPLO-0009' },
+      depois: { projeto: 'EXEMPLO-0001' },
+    })
+  })
+
+  it('mudou com entram de um removido de outro projeto leva o defeito', async () => {
+    await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }])
+    await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000003', situacao: 'removido' }])
+    const id = await novidade('EXEMPLO-0001', 'mudou', {
+      entram: [defeito('-9000003', campos)],
+      saem: [],
+      prioridade_antes: 7,
+      prioridade_nova: 4,
+      alimentadores: ['EXE01S1', 'EXE09S9'],
+    })
+    await aceitar(id)
+    expect(await defeitoNoBanco('-9000003')).toEqual(levado('-9000003', 'EXEMPLO-0001'))
+    expect(await defeitos('EXEMPLO-0009')).toEqual([])
+    expect(await projeto('EXEMPLO-0001')).toMatchObject({ prioridade: 4, alimentadores: ['EXE01S1', 'EXE09S9'] })
+  })
+
+  for (const situacao of ['pendente', 'programado', 'executado']) {
+    it(`novo com defeito ${situacao} em outro projeto: erro e nada gravado`, async () => {
+      await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000002', situacao }])
+      await projetoNaCarteira('EXEMPLO-0008', [{ id: '-9000001', situacao: 'removido' }])
+      const id = await novidade(
+        'SEM-PROJETO-SUL',
+        'novo',
+        dadosNovo('SEM-PROJETO-SUL', [defeito('-9000001'), defeito('-9000002'), defeito('-9000003')]),
+      )
+      await expect(aceitar(id)).rejects.toThrow('O defeito -9000002 já está no projeto EXEMPLO-0009.')
+      expect(await projeto('SEM-PROJETO-SUL')).toBeUndefined()
+      expect(await defeitoNoBanco('-9000001')).toMatchObject({ projeto: 'EXEMPLO-0008', situacao: 'removido' })
+      expect(await defeitoNoBanco('-9000002')).toMatchObject({ projeto: 'EXEMPLO-0009', situacao })
+      expect(await contar('defeitos')).toBe(2)
+      expect((await lerNovidade(id)).situacao).toBe('aberta')
+    })
+
+    it(`mudou com defeito ${situacao} em outro projeto: erro e nada gravado`, async () => {
+      await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }])
+      await projetoNaCarteira('EXEMPLO-0008', [{ id: '-9000002', situacao: 'removido' }])
+      await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000003', situacao }])
+      const id = await novidade('EXEMPLO-0001', 'mudou', {
+        entram: [defeito('-9000002'), defeito('-9000003')],
+        saem: ['-9000001'],
+        prioridade_antes: 7,
+        prioridade_nova: 3,
+        alimentadores: ['EXE03S3'],
+      })
+      await expect(aceitar(id)).rejects.toThrow('O defeito -9000003 já está no projeto EXEMPLO-0009.')
+      expect(await defeitoNoBanco('-9000002')).toMatchObject({ projeto: 'EXEMPLO-0008', situacao: 'removido' })
+      expect((await defeitos('EXEMPLO-0001')).map((d) => [d.id_gom, d.situacao])).toEqual([['-9000001', 'pendente']])
+      expect(await projeto('EXEMPLO-0001')).toMatchObject({ prioridade: 7, alimentadores: ['EXE01S1'] })
+      expect((await lerNovidade(id)).situacao).toBe('aberta')
+    })
+  }
+
+  describe('com o enviar_demanda (Review Focus 1)', () => {
+    let robo: string
+
+    async function enviar(projetos: unknown[], presentes: string[]) {
+      const [linha] = await como<{ r: Record<string, number> }>(
+        db,
+        { id: robo },
+        'select public.enviar_demanda($1, $2, $3::jsonb) as r',
+        ['SUL', 'EXEMPLO-demanda.xlsx', JSON.stringify({ projetos, presentes })],
+      )
+      return linha.r
+    }
+
+    async function abertas() {
+      const { rows } = await db.query<{ id: number; projeto: string; tipo: string }>(
+        `select id, projeto, tipo from public.novidades where situacao = 'aberta' order by id`,
+      )
+      return rows.map((r) => ({ ...r, id: Number(r.id) }))
+    }
+
+    beforeEach(async () => {
+      robo = await criarPessoa(db, { papel: 'importador' })
+    })
+
+    it('depois de levado do SEM-PROJETO, a mesma planilha lida de novo não cria novidade', async () => {
+      await projetoNaCarteira('EXEMPLO-0009', [{ id: '-9000002', situacao: 'removido' }], { origem: 'manual' })
+      const projetos = [dadosNovo('SEM-PROJETO-SUL', [defeito('-9000001'), defeito('-9000002')])]
+      expect(await enviar(projetos, ['SEM-PROJETO-SUL'])).toMatchObject({ novo: 1 })
+      const [n] = await abertas()
+      await aceitar(n.id)
+      expect(await defeitoNoBanco('-9000002')).toMatchObject({ projeto: 'SEM-PROJETO-SUL', situacao: 'pendente' })
+      const antes = await contar('novidades')
+      expect(await enviar(projetos, ['SEM-PROJETO-SUL'])).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+      expect(await contar('novidades')).toBe(antes)
+      expect(await abertas()).toEqual([])
+    })
+
+    it('a Enel moveu o defeito do Y para o Z: aceitar o mudou do Y e depois o novo do Z leva o defeito', async () => {
+      await projetoNaCarteira('EXEMPLO-0001', [{ id: '-9000001' }, { id: '-9000003' }])
+      const projetos = [
+        dadosNovo('EXEMPLO-0001', [defeito('-9000001')]),
+        dadosNovo('EXEMPLO-0002', [defeito('-9000003', campos)]),
+      ]
+      const presentes = ['EXEMPLO-0001', 'EXEMPLO-0002']
+      expect(await enviar(projetos, presentes)).toMatchObject({ novo: 1, mudou: 1 })
+      const lista = await abertas()
+      const mudou = lista.find((n) => n.tipo === 'mudou' && n.projeto === 'EXEMPLO-0001')!
+      const novo = lista.find((n) => n.tipo === 'novo' && n.projeto === 'EXEMPLO-0002')!
+      expect(lista).toHaveLength(2)
+      await expect(aceitar(novo.id)).rejects.toThrow('O defeito -9000003 já está no projeto EXEMPLO-0001.')
+      await aceitar(mudou.id)
+      await aceitar(novo.id)
+      expect(await defeitoNoBanco('-9000003')).toEqual(levado('-9000003', 'EXEMPLO-0002'))
+      const antes = await contar('novidades')
+      expect(await enviar(projetos, presentes)).toMatchObject({ novo: 0, mudou: 0, saiu: 0, corrigido: 0 })
+      expect(await contar('novidades')).toBe(antes)
+      expect(await abertas()).toEqual([])
+    })
   })
 })
 
