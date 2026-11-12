@@ -1,13 +1,13 @@
 // Cadastro de equipes: o LID dá a base e o grupo sugerido do Report; o admin pode trocar o grupo.
+// Prefixo que não é de base conhecida mantém a base já gravada (a carga põe a base pelo centro de serviço).
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { WarningCircle } from '@phosphor-icons/react'
-import { baseDoLid, grupoSugerido } from '../../dominio/equipes'
+import { baseDoLid, grupoSugerido, TIPOS_EQUIPE } from '../../dominio/equipes'
 import type { Regional, TipoEquipe } from '../../dominio/tipos'
 import { listarEquipes, salvarEquipe, type Equipe } from '../../nuvem/configuracoes'
 import { mensagemDeErro } from '../../nuvem/erros'
 
-const TIPOS: TipoEquipe[] = ['ML', 'LVR', 'MP', 'LV']
 const REGIONAIS: { id: Regional; nome: string }[] = [
   { id: 'CS', nome: 'Centro-Sul' },
   { id: 'SUL', nome: 'Sul' },
@@ -24,10 +24,16 @@ interface Rascunho {
   ativa: boolean
   novo: boolean
   foto_path: string | null
+  baseGravada: string | null
 }
 
 const VAZIO: Rascunho = {
   lid: '', chefe: '', tipo: 'ML', regional: 'CS', grupo: '', grupoMexido: false, ativa: true, novo: true, foto_path: null,
+  baseGravada: null,
+}
+
+function baseDoRascunho(r: Rascunho): string | null {
+  return baseDoLid(r.lid.trim().toUpperCase()) ?? r.baseGravada
 }
 
 export function Equipes({ c }: { c: SupabaseClient }) {
@@ -48,14 +54,14 @@ export function Equipes({ c }: { c: SupabaseClient }) {
   useEffect(() => { void carregar() }, [carregar])
 
   const lid = r.lid.trim().toUpperCase()
-  const base = baseDoLid(lid)
+  const base = baseDoRascunho(r)
 
   // O grupo sugerido acompanha LID e tipo, mas só enquanto o admin não escreveu nele.
   function mudar(parte: Partial<Rascunho>) {
     setR((antes) => {
       const prox = { ...antes, ...parte }
       if (!prox.grupoMexido) {
-        prox.grupo = grupoSugerido(prox.tipo, baseDoLid(prox.lid.trim().toUpperCase())) ?? ''
+        prox.grupo = grupoSugerido(prox.tipo, baseDoRascunho(prox)) ?? ''
       }
       return prox
     })
@@ -65,7 +71,7 @@ export function Equipes({ c }: { c: SupabaseClient }) {
     setErro(null)
     setR({
       lid: e.lid, chefe: e.chefe, tipo: e.tipo, regional: e.regional, grupo: e.grupo_report ?? '',
-      grupoMexido: true, ativa: e.ativa, novo: false, foto_path: e.foto_path,
+      grupoMexido: true, ativa: e.ativa, novo: false, foto_path: e.foto_path, baseGravada: e.base,
     })
   }
 
@@ -121,7 +127,7 @@ export function Equipes({ c }: { c: SupabaseClient }) {
           <div>
             <label className="cfg__rotulo" htmlFor="eq-tipo">Tipo</label>
             <select id="eq-tipo" className="cfg__entrada" value={r.tipo} onChange={(e) => mudar({ tipo: e.target.value as TipoEquipe })}>
-              {TIPOS.map((t) => <option key={t} value={t}>{t}</option>)}
+              {TIPOS_EQUIPE.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div>

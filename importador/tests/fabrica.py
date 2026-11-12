@@ -75,6 +75,35 @@ def linha_carteira(**mudar):
     return valores
 
 
+CABECALHO_LISTA_EQUIPES = [
+    "Código Equipe", "Centro de Custo", "Gestor", "Coordenador(es)", "Centro de Serviço",
+    "Supervisor(es)", "Colaboradores na Equipe (aprovados)", "Horários",
+]
+
+
+def equipe_csv(codigo="9Z/JZN-ML-99X", custo="CONTRATO EXEMPLO SUL", servico="C.S. JUAZEIRO",
+               colaboradores="Pessoa Exemplo 1, Pessoa Exemplo 2"):
+    """Uma linha FICTÍCIA de lista de equipes."""
+    return {"Código Equipe": codigo, "Centro de Custo": custo, "Centro de Serviço": servico,
+            "Colaboradores na Equipe (aprovados)": colaboradores, "Gestor": "Gestor Exemplo",
+            "Coordenador(es)": "Coordenador Exemplo", "Supervisor(es)": "Supervisor Exemplo",
+            "Horários": "07:00 - 16:00"}
+
+
+def criar_lista_equipes(pasta: Path, nome="equipes_aprovadas_exemplo.csv", linhas=(), aspas=False,
+                        codificacao="utf-8-sig", cabecalho=None):
+    """CSV FICTÍCIO com ';', como a lista de equipes aprovadas (com ou sem aspas)."""
+    cab = cabecalho or CABECALHO_LISTA_EQUIPES
+
+    def campo(v):
+        return f'"{v}"' if aspas else str(v)
+    texto = [";".join(campo(c) for c in cab)]
+    texto += [";".join(campo(l.get(c, "")) for c in cab) for l in linhas]
+    caminho = pasta / nome
+    caminho.write_bytes(("\r\n".join(texto) + "\r\n").encode(codificacao))
+    return caminho
+
+
 def criar_xlsm(pasta: Path, nome="controle.xlsm", carteira=None, equipes=None, solicitantes=None):
     """xlsm FICTÍCIO com as abas CARTEIRA (cabeçalho na linha 1) e LISTA.
     carteira: lista de `linha_carteira`; equipes: lista de (LID, chefe, tipo)."""

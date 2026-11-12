@@ -83,6 +83,46 @@ describe('Equipes', () => {
     expect(salvarEquipe).not.toHaveBeenCalled()
   })
 
+  it('o seletor de tipo mostra os 14 tipos, e tipo novo deixa o grupo vazio', async () => {
+    render(<Equipes c={c} />)
+    await screen.findByText('Nenhuma equipe cadastrada ainda.')
+    const tipo = screen.getByLabelText('Tipo') as HTMLSelectElement
+    expect([...tipo.options].map((o) => o.value)).toEqual(
+      ['ML', 'LVR', 'MP', 'LV', 'RD', 'LB', 'LN', 'MM', 'SK', 'GA', 'TR', 'RL', 'LM', 'MO'],
+    )
+    await userEvent.type(screen.getByLabelText('LID'), 'JZN-RD-99X')
+    await userEvent.selectOptions(tipo, 'RD')
+    expect((screen.getByLabelText('Grupo do Report') as HTMLInputElement).value).toBe('')
+  })
+
+  it('editar equipe com prefixo desconhecido mantém a base gravada', async () => {
+    vi.mocked(listarEquipes).mockResolvedValue([{
+      lid: 'XYZ-LB-99X', chefe: 'Pessoa Exemplo', tipo: 'LB', regional: 'SUL', grupo_report: null,
+      base: 'JZN', ativa: true, foto_path: null,
+    }])
+    render(<Equipes c={c} />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Editar XYZ-LB-99X' }))
+    expect((screen.getByLabelText('Base') as HTMLInputElement).value).toBe('JZN')
+    const chefe = screen.getByLabelText('Chefe de turma')
+    await userEvent.clear(chefe)
+    await userEvent.type(chefe, 'Outra Pessoa')
+    await userEvent.click(screen.getByRole('button', { name: 'Salvar equipe' }))
+    expect(salvarEquipe).toHaveBeenCalledWith(c, expect.objectContaining({
+      lid: 'XYZ-LB-99X', chefe: 'Outra Pessoa', tipo: 'LB', base: 'JZN',
+    }))
+  })
+
+  it('editar equipe com prefixo de base conhecida usa a base do LID', async () => {
+    vi.mocked(listarEquipes).mockResolvedValue([{
+      lid: 'ICO-ML-99X', chefe: 'Pessoa Exemplo', tipo: 'ML', regional: 'CS', grupo_report: 'ML Icó',
+      base: null, ativa: true, foto_path: null,
+    }])
+    render(<Equipes c={c} />)
+    await userEvent.click(await screen.findByRole('button', { name: 'Editar ICO-ML-99X' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Salvar equipe' }))
+    expect(salvarEquipe).toHaveBeenCalledWith(c, expect.objectContaining({ lid: 'ICO-ML-99X', base: 'ICO' }))
+  })
+
   it('com a lista ainda carregando, Salvar equipe fica travado e não grava', async () => {
     vi.mocked(listarEquipes).mockReturnValue(new Promise(() => {}))
     render(<Equipes c={c} />)

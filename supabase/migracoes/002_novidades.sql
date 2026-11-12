@@ -1085,3 +1085,11 @@ revoke all on function public.texto_comparavel(text) from public, anon, authenti
 revoke all on function public.perfis_pelo_nome(text) from public, anon, authenticated;
 revoke all on function public.carga_inicial(jsonb, boolean) from public, anon;
 grant execute on function public.carga_inicial(jsonb, boolean) to authenticated;
+
+-- ---------------------------------------------------------------
+-- 10. Tipos de equipe: além de ML, LVR, MP e LV, as siglas das listas de
+--     equipes (RD, LB, LN, MM, SK, GA, TR, RL, LM, MO). Pode rodar de novo.
+-- ---------------------------------------------------------------
+alter table public.equipes drop constraint if exists equipes_tipo_check;
+alter table public.equipes add constraint equipes_tipo_check
+  check (tipo in ('ML', 'LVR', 'MP', 'LV', 'RD', 'LB', 'LN', 'MM', 'SK', 'GA', 'TR', 'RL', 'LM', 'MO'));

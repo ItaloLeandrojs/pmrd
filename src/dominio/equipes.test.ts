@@ -1,11 +1,19 @@
 import { describe, expect, it } from 'vitest'
-import { baseDoLid, BASES, grupoSugerido } from './equipes'
+import { baseDoLid, BASES, grupoSugerido, TIPOS_EQUIPE } from './equipes'
 
 describe('equipes', () => {
-  it('tem as 7 bases (SNP e TAA desde 11/11)', () => {
-    expect(Object.keys(BASES)).toEqual(['JZN', 'MLG', 'ICO', 'IGT', 'CPS', 'SNP', 'TAA'])
+  it('tem as 10 bases (SNP e TAA desde 11/11; RSL, ART e JGB do Leste na Tarefa 7c)', () => {
+    expect(Object.keys(BASES)).toEqual(['JZN', 'MLG', 'ICO', 'IGT', 'CPS', 'SNP', 'TAA', 'RSL', 'ART', 'JGB'])
     expect(BASES.SNP).toBe('Senador Pompeu')
     expect(BASES.TAA).toBe('Tauá')
+    expect(BASES.RSL).toBe('Limoeiro')
+    expect(BASES.ART).toBe('Aracati')
+    expect(BASES.JGB).toBe('Jaguaribe')
+  })
+  it('tem os 14 tipos de equipe, e os 10 novos não têm grupo sugerido', () => {
+    expect(TIPOS_EQUIPE).toEqual(['ML', 'LVR', 'MP', 'LV', 'RD', 'LB', 'LN', 'MM', 'SK', 'GA', 'TR', 'RL', 'LM', 'MO'])
+    for (const tipo of TIPOS_EQUIPE.slice(4)) expect(grupoSugerido(tipo, 'JZN')).toBeNull()
+    expect(grupoSugerido('ML', 'RSL')).toBe('ML Limoeiro')
   })
   it('SNP e TAA dão base e grupo', () => {
     expect(baseDoLid('SNP-COS-99X')).toBe('SNP')

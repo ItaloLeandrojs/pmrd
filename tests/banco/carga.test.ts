@@ -1,6 +1,6 @@
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { como, criarPessoa, novoBanco } from './apoio'
+import { aplicarMigracoes, como, criarPessoa, novoBanco } from './apoio'
 
 // Tarefa 7: carga inicial da carteira (xlsm + demanda), uma vez só.
 // Dados só fictícios (projetos EXEMPLO-..., IDs -9000001...).
@@ -284,6 +284,40 @@ describe('carga_inicial', () => {
     ])
     const { rows: sols } = await db.query(`select nome from public.solicitantes_sgd order by lower(nome)`)
     expect(sols).toEqual([{ nome: 'solicitante exemplo' }, { nome: 'Solicitante Exemplo Novo' }])
+  })
+
+  it('equipes dos 10 tipos novos entram pela carga, sem grupo do Report (Tarefa 7c)', async () => {
+    const novos = ['RD', 'LB', 'LN', 'MM', 'SK', 'GA', 'TR', 'RL', 'LM', 'MO']
+    const carga = cargaBasica()
+    carga.equipes = novos.map((tipo, i) => ({
+      lid: `JZN-${tipo}-${String(90 + i)}X`, chefe: 'Pessoa Exemplo', tipo, regional: 'SUL', base: 'JZN', grupo_report: '',
+    }))
+    const r = await carregar(carga)
+    expect(r).toMatchObject({ equipes: 10 })
+    const { rows } = await db.query<{ tipo: string; grupo_report: string | null }>(
+      `select tipo, grupo_report from public.equipes order by lid`,
+    )
+    expect(rows.map((e) => e.tipo).sort()).toEqual([...novos].sort())
+    expect(rows.every((e) => e.grupo_report === null)).toBe(true)
+  })
+
+  it('tipo fora da lista continua recusado e nada é gravado', async () => {
+    const carga = cargaBasica()
+    carga.equipes = [{ lid: 'JZN-XX-99X', chefe: 'Pessoa Exemplo', tipo: 'XX', regional: 'SUL', base: 'JZN', grupo_report: '' }]
+    await expect(carregar(carga)).rejects.toThrow()
+    expect((await db.query(`select 1 from public.equipes`)).rows).toEqual([])
+    expect(await projetos()).toEqual([])
+  })
+
+  it('rodar as migrações de novo mantém os tipos novos aceitos', async () => {
+    await aplicarMigracoes(db)
+    await aplicarMigracoes(db)
+    const carga = cargaBasica()
+    carga.equipes = [{ lid: 'RSL-RD-99X', chefe: 'Pessoa Exemplo', tipo: 'RD', regional: 'LESTE', base: 'RSL', grupo_report: '' }]
+    expect(await carregar(carga)).toMatchObject({ equipes: 1 })
+    await expect(db.query(
+      `insert into public.equipes (lid, chefe, tipo, regional) values ('JZN-XX-98X', 'Pessoa Exemplo', 'XX', 'SUL')`,
+    )).rejects.toThrow()
   })
 
   it('erro no meio desfaz tudo', async () => {

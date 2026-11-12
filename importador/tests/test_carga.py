@@ -1,11 +1,12 @@
 import json
+import shutil
 import tempfile
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
-from fabrica import criar_demanda, criar_xlsm, linha, linha_carteira
+from fabrica import criar_demanda, criar_lista_equipes, criar_xlsm, equipe_csv, linha, linha_carteira
 from pmrd_importador import carga
 from pmrd_importador.carga import ler_carteira_xlsm, ler_lista_xlsm, main, montar_carga
 from pmrd_importador.municipios import Municipios
@@ -408,3 +409,155 @@ def test_projeto_ativo_em_duas_regionais_avisa(tmp_path):
     demandas["SUL"] = Demanda([defeito("-9000012", "EXEMPLO-0007")])
     c = montar(tmp_path, carteira=[], demandas=demandas, coords={})
     assert any("EXEMPLO-0007" in a and "CS" in a and "SUL" in a for a in c["avisos"])
+
+
+# ---------------------------------------------------------------- Tarefa 7c: listas de equipes
+
+def da_lista(lid, tipo="ML", regional="SUL", base="JZN", chefe="Pessoa Primeira"):
+    """Equipe como sai de equipes_csv.equipes_das_listas."""
+    return {"lid": lid, "chefe": chefe, "tipo": tipo, "regional": regional, "base": base}
+
+
+def montar7c(tmp_path, lista=(), das_listas=()):
+    x = criar_xlsm(tmp_path, carteira=[])
+    return montar_carga(ler_carteira_xlsm(x), vazias(), {}, MALHA, list(lista), [], list(das_listas))
+
+
+def test_7c_grupo_sugerido_dos_tipos_novos_e_das_bases_do_leste():
+    assert carga.grupo_sugerido("RD", "JZN") is None
+    assert carga.grupo_sugerido("LB", None) is None
+    assert carga.grupo_sugerido("ML", "RSL") == "ML Limoeiro"
+    assert carga.grupo_sugerido("ML", "ART") == "ML Aracati"
+    assert carga.grupo_sugerido("ML", "JGB") == "ML Jaguaribe"
+    assert carga.BASES["RSL"] == "Limoeiro" and carga.REGIONAL_DA_BASE["JGB"] == "LESTE"
+
+
+def test_7c_so_nas_listas_entra_pelas_regras_da_lista(tmp_path):
+    c = montar7c(tmp_path, das_listas=[da_lista("JZN-LV-99X", tipo="LV"), da_lista("XYZ-RD-99X", tipo="RD"),
+                                       da_lista("RSL-ML-99X", regional="LESTE", base="RSL")])
+    eq = {e["lid"]: e for e in c["equipes"]}
+    assert eq["JZN-LV-99X"] == {"lid": "JZN-LV-99X", "chefe": "Pessoa Primeira", "tipo": "LV", "regional": "SUL",
+                                "base": "JZN", "grupo_report": "Linha Viva"}
+    assert eq["XYZ-RD-99X"]["base"] == "JZN" and eq["XYZ-RD-99X"]["grupo_report"] is None
+    assert eq["RSL-ML-99X"]["regional"] == "LESTE" and eq["RSL-ML-99X"]["grupo_report"] == "ML Limoeiro"
+
+
+def test_7c_equipe_nos_dois_fica_com_chefe_e_tipo_da_lista_e_base_e_regional_das_listas(tmp_path):
+    lista = [{"lid": "JZN-LV-99X", "chefe": "Pessoa Da Lista", "tipo": "LVR"},
+             {"lid": "XYZ-LB-99X", "chefe": "Pessoa Da Lista 2", "tipo": "ML"}]
+    das = [da_lista("JZN-LV-99X", tipo="LV", base="MLG"), da_lista("XYZ-LB-99X", tipo="LB", base="JZN")]
+    c = montar7c(tmp_path, lista, das)
+    eq = {e["lid"]: e for e in c["equipes"]}
+    assert eq["JZN-LV-99X"] == {"lid": "JZN-LV-99X", "chefe": "Pessoa Da Lista", "tipo": "LVR", "regional": "SUL",
+                                "base": "MLG", "grupo_report": "Linha Viva"}
+    # Prefixo desconhecido: entra porque está na lista de equipes, com a base dela.
+    assert eq["XYZ-LB-99X"] == {"lid": "XYZ-LB-99X", "chefe": "Pessoa Da Lista 2", "tipo": "ML", "regional": "SUL",
+                                "base": "JZN", "grupo_report": "ML Juazeiro"}
+    assert len(c["equipes"]) == 2
+    assert not any("XYZ-LB-99X" in a and "desconhecido" in a for a in c["avisos"])
+
+
+def test_7c_nos_dois_com_tipo_ou_chefe_vazio_na_lista_usa_o_da_lista_de_equipes(tmp_path):
+    lista = [{"lid": "JZN-RD-99X", "chefe": "", "tipo": "OUTRO"}]
+    c = montar7c(tmp_path, lista, [da_lista("JZN-RD-99X", tipo="RD")])
+    assert [(e["tipo"], e["chefe"]) for e in c["equipes"]] == [("RD", "Pessoa Primeira")]
+    assert any("JZN-RD-99X" in a and "OUTRO" in a and "RD" in a for a in c["avisos"])
+
+
+def test_7c_regional_do_prefixo_diferente_da_lista_vale_a_lista_com_aviso(tmp_path):
+    lista = [{"lid": "ICO-ML-99X", "chefe": "Pessoa Da Lista", "tipo": "ML"}]
+    c = montar7c(tmp_path, lista, [da_lista("ICO-ML-99X", regional="SUL", base="JZN")])
+    [e] = c["equipes"]
+    assert (e["regional"], e["base"]) == ("SUL", "JZN")
+    assert any("ICO-ML-99X" in a and "CS" in a and "SUL" in a for a in c["avisos"])
+
+
+def test_7c_so_na_lista_entra_como_hoje(tmp_path):
+    lista = [{"lid": "SNP-RL-99X(SUPLENTE)", "chefe": "Pessoa Da Lista", "tipo": "ML"},
+             {"lid": "XYZ-ML-01", "chefe": "Pessoa Da Lista", "tipo": "ML"}]
+    c = montar7c(tmp_path, lista, [da_lista("SNP-RL-99X", tipo="RL", regional="CS", base="SNP")])
+    eq = {e["lid"]: (e["tipo"], e["base"], e["chefe"]) for e in c["equipes"]}
+    assert eq == {"SNP-RL-99X(SUPLENTE)": ("ML", "SNP", "Pessoa Da Lista"),
+                  "SNP-RL-99X": ("RL", "SNP", "Pessoa Primeira")}
+    assert any("XYZ-ML-01" in a for a in c["avisos"])
+
+
+def test_7c_aviso_conta_chefes_da_lista_e_do_primeiro_colaborador(tmp_path):
+    lista = [{"lid": "JZN-ML-99X", "chefe": "Pessoa Da Lista", "tipo": "ML"}]
+    c = montar7c(tmp_path, lista, [da_lista("JZN-ML-99X"), da_lista("JZN-ML-98X"), da_lista("JZN-RD-97X", tipo="RD")])
+    assert ("Equipes: 1 com o chefe da aba LISTA e 2 com o 1º colaborador da lista de equipes "
+            "(conferir na tela de equipes).") in c["avisos"]
+
+
+def test_7c_sem_listas_nada_muda(tmp_path):
+    lista = [{"lid": "JZN-ML-99X", "chefe": "Pessoa Da Lista", "tipo": "ML"}]
+    c = montar7c(tmp_path, lista)
+    assert c["equipes"] == [{"lid": "JZN-ML-99X", "chefe": "Pessoa Da Lista", "tipo": "ML", "regional": "SUL",
+                             "base": "JZN", "grupo_report": "ML Juazeiro"}]
+    assert not any("colaborador" in a for a in c["avisos"])
+
+
+def preparar_equipes(tmp_path):
+    pasta = tmp_path / "equipes"
+    pasta.mkdir()
+    criar_lista_equipes(pasta, "equipes_aprovadas_sul.csv", [
+        equipe_csv(codigo="9Z/CPS-LV-99X", servico="C.S. CAMPOS SALES", colaboradores="Pessoa Um, Pessoa Dois"),
+        equipe_csv(codigo="9Z/JZN-RD-99X", colaboradores="Pessoa Tres, Pessoa Quatro"),
+        equipe_csv(codigo="9Z/ADM-EXEMPLO-1JZN"),
+    ])
+    criar_lista_equipes(pasta, "equipes_aprovadas_leste.csv", [
+        equipe_csv(codigo="9Z/RSL-COS-99X", custo="CONTRATO EXEMPLO LESTE", servico="C.S. LIMOEIRO",
+                   colaboradores="Pessoa Cinco, Pessoa Seis"),
+    ], aspas=True)
+    return pasta
+
+
+def test_7c_main_ensaio_com_equipes_mostra_as_equipes_das_listas(tmp_path, capsys):
+    args = preparar(tmp_path)
+    pasta = preparar_equipes(tmp_path)
+    assert main(["--ensaio", *args, "--equipes", str(pasta)], nuvem=NuvemFalsa()) == 0
+    out = capsys.readouterr().out
+    assert "JZN-RD-99X" in out and "RSL-COS-99X" in out
+    assert "Equipes por regional: CS 0, LESTE 1, SUL 2" in out
+    assert "Equipes por tipo: LVR 1, MP 1, RD 1" in out
+    assert "1 equipe ADM ficou de fora" in out
+
+
+def test_7c_main_com_equipes_manda_so_o_chefe_e_nao_deixa_copia(tmp_path, monkeypatch):
+    args = preparar(tmp_path)
+    pasta = preparar_equipes(tmp_path)
+    antes = {p.name: p.read_bytes() for p in pasta.iterdir()}
+    temporaria = tmp_path / "temporaria"
+    temporaria.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temporaria))
+    copiados = []
+    copiar = shutil.copy2
+
+    def espiar(origem, destino, *a, **k):
+        copiados.append(Path(destino))
+        return copiar(origem, destino, *a, **k)
+    monkeypatch.setattr(shutil, "copy2", espiar)
+    respostas = iter(["admin@exemplo.test", "CARREGAR"])
+    monkeypatch.setattr("builtins.input", lambda *a: next(respostas))
+    monkeypatch.setattr("getpass.getpass", lambda *a, **k: "senha-de-teste")
+    nuvem = NuvemFalsa()
+    assert main(args + ["--equipes", str(pasta)], nuvem=nuvem) == 0
+    p_carga = nuvem.chamadas[1][1]["p_carga"]
+    eq = {e["lid"]: e for e in p_carga["equipes"]}
+    # CPS-LV-99X está na aba LISTA do preparar (LVR, Pessoa Exemplo).
+    assert (eq["CPS-LV-99X"]["tipo"], eq["CPS-LV-99X"]["chefe"]) == ("LVR", "Pessoa Exemplo")
+    assert (eq["JZN-RD-99X"]["chefe"], eq["RSL-COS-99X"]["tipo"], eq["RSL-COS-99X"]["regional"]) == \
+        ("Pessoa Tres", "MP", "LESTE")
+    texto = json.dumps(p_carga, ensure_ascii=False)
+    assert "Pessoa Dois" not in texto and "Pessoa Quatro" not in texto and "Pessoa Seis" not in texto
+    assert {c.name for c in copiados if c.suffix == ".csv"} == {"equipes-equipes_aprovadas_sul.csv",
+                                                               "equipes-equipes_aprovadas_leste.csv"}
+    assert all(c.is_relative_to(temporaria) for c in copiados)
+    assert list(temporaria.iterdir()) == []
+    assert {p.name: p.read_bytes() for p in pasta.iterdir()} == antes
+
+
+def test_7c_main_pasta_de_equipes_inexistente_e_erro(tmp_path, capsys):
+    args = preparar(tmp_path)
+    assert main(["--ensaio", *args, "--equipes", str(tmp_path / "nao-existe")], nuvem=NuvemFalsa()) == 1
+    assert "nao-existe" in capsys.readouterr().out
